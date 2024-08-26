@@ -2,14 +2,13 @@
 
 # 函数：列出可用磁盘
 list_available_disks() {
-    echo "可用的磁盘："
     lsblk -ndo NAME,SIZE,TYPE | grep disk
 }
 
-# 函数：检查是否有未分配空间
+# 函数：检查是否有未分配空间（以GB为单位）
 check_free_space() {
     local disk=$1
-    local free_space=$(sudo parted /dev/$disk unit % print free | awk '/Free Space/ {print $3}' | tail -n1 | sed 's/%//')
+    local free_space=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {gsub("GB",""); print $3}' | tail -n1)
     echo "${free_space%.*}"  # 去掉小数部分
 }
 
@@ -25,8 +24,9 @@ create_partition() {
     local disk=$1
     local size=$2
     local partition_number=$3
-    local start=$(sudo parted /dev/$disk unit % print free | awk '/Free Space/ {print $1}' | tail -n1)
-    sudo parted /dev/$disk --script mkpart primary ${start} ${size}%
+    local start=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {print $1}' | tail -n1)
+    local end=$(echo "$start + $size" | bc)
+    sudo parted /dev/$disk --script mkpart primary ${start}GB ${end}GB
     sudo partprobe /dev/$disk
     sleep 2
 }
@@ -105,6 +105,7 @@ while true; do
 
     case $choice in
         1)
+            echo "可用的硬盘："
             list_available_disks
             read -p "请输入要操作的磁盘名称 (如 vda): " disk
             if [ ! -b "/dev/$disk" ]; then
@@ -113,13 +114,15 @@ while true; do
             fi
             
             free_space=$(check_free_space $disk)
-            echo "可用的未分配空间: ${free_space}%"
-            read -p "请输入新分区的大小（百分比，最大 ${free_space}%）: " size
-            
-            if [ $size -gt $free_space ]; then
-                echo "错误：指定的大小超过了可用空间"
+            echo "可用的未分配空间: ${free_space}GB"
+            read -p "请输入新分区的占用（最大100%）: " percentage
+
+            if [ $percentage -gt 100 ] || [ $percentage -le 0 ]; then
+                echo "错误：请输入1到100之间的数字"
                 continue
             fi
+
+            size=$(echo "scale=2; $free_space * $percentage / 100" | bc)
             
             next_partition_number=$(get_next_partition_number $disk)
             create_partition $disk $size $next_partition_number
