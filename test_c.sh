@@ -76,14 +76,59 @@ show_swap_status() {
     fi
 }
 
+clean_fstab() {
+    echo "检查 /etc/fstab 中的失效条目..."
+    local temp_fstab=$(mktemp)
+    while read -r line; do
+        if [[ $line =~ ^# || -z $line ]]; then
+            echo "$line" >> "$temp_fstab"
+        else
+            device=$(echo "$line" | awk '{print $1}')
+            mount_point=$(echo "$line" | awk '{print $2}')
+            if [[ $device == UUID=* ]]; then
+                uuid=${device#UUID=}
+                if blkid -U "$uuid" > /dev/null; then
+                    echo "$line" >> "$temp_fstab"
+                else
+                    echo "移除失效的 UUID 条目: $line"
+                fi
+            elif [[ $device == LABEL=* ]]; then
+                label=${device#LABEL=}
+                if blkid -L "$label" > /dev/null; then
+                    echo "$line" >> "$temp_fstab"
+                else
+                    echo "移除失效的 LABEL 条目: $line"
+                fi
+            elif [[ $device == /dev/* ]]; then
+                if [ -b "$device" ]; then
+                    echo "$line" >> "$temp_fstab"
+                else
+                    echo "移除失效的设备条目: $line"
+                fi
+            else
+                echo "$line" >> "$temp_fstab"
+            fi
+        fi
+    done < /etc/fstab
+
+    if diff /etc/fstab "$temp_fstab" > /dev/null; then
+        echo "未发现失效条目。"
+    else
+        cp /etc/fstab /etc/fstab.bak
+        mv "$temp_fstab" /etc/fstab
+        echo "/etc/fstab 已更新，原文件备份为 /etc/fstab.bak"
+    fi
+}
+
 # 主菜单
 while true; do
     echo "磁盘管理工具"
     echo "1) 创建和挂载硬盘分区"
     echo "2) 删除分区"
     echo "3) 管理swap"
-    echo "4) 退出"
-    read -p "请选择操作 (1-4): " choice
+    echo "4) 清理 /etc/fstab 中的失效条目"
+    echo "5) 退出"
+    read -p "请选择操作 (1-5): " choice
 
     case $choice in
         1)
@@ -143,6 +188,9 @@ while true; do
             done
             ;;
         4)
+            clean_fstab
+            ;;
+        5)
             echo "退出脚本"
             exit 0
             ;;
