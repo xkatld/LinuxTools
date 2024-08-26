@@ -1,27 +1,24 @@
 #!/bin/bash
 
+get_free_space() {
+    local disk=$1
+    local total_size=$(blockdev --getsize64 /dev/$disk)
+    local used_size=$(fdisk -l /dev/$disk | grep ^/dev | awk '{s+=$5} END {print s}')
+    echo $((($total_size - $used_size) / 1024 / 1024)) # 返回MB为单位的可用空间
+}
+
 create_partition() {
     local disk=$1
-    local percentage=$2
+    local size=$2
 
-    expect <<EOF
-spawn fdisk /dev/$disk
-expect "命令(输入 m 获取帮助)："
-send "n\r"
-expect "选择 (默认 p)："
-send "p\r"
-expect "分区号"
-send "\r"
-expect "第一个扇区"
-send "\r"
-expect "上个扇区，+sectors 或 +size{K,M,G,T,P}"
-send "+${percentage}%\r"
-expect "您想移除该签名吗"
-send "y\r"
-expect "命令(输入 m 获取帮助)："
-send "w\r"
-expect eof
-EOF
+    (
+    echo n # 新建分区
+    echo p # 主分区
+    echo   # 默认分区号
+    echo   # 默认起始扇区
+    echo +${size}M # 结束扇区
+    echo w # 写入更改
+    ) | fdisk /dev/$disk
 
     partprobe /dev/$disk
     sleep 2
@@ -43,23 +40,14 @@ delete_partition() {
     local disk=${partition:0:3}
     local part_num=${partition:3}
 
-    # 卸载分区
     umount /dev/$partition 2>/dev/null
-
-    # 从 fstab 中删除条目
     sed -i "\|^/dev/$partition|d" /etc/fstab
 
-    # 使用 fdisk 删除分区
-    expect <<EOF
-spawn fdisk /dev/$disk
-expect "命令(输入 m 获取帮助)："
-send "d\r"
-expect "分区号"
-send "$part_num\r"
-expect "命令(输入 m 获取帮助)："
-send "w\r"
-expect eof
-EOF
+    (
+    echo d # 删除分区
+    echo $part_num # 分区号
+    echo w # 写入更改
+    ) | fdisk /dev/$disk
 
     partprobe /dev/$disk
     sleep 2
@@ -115,13 +103,16 @@ while true; do
                 echo "错误：指定的磁盘不存在"
                 continue
             fi
+            free_space=$(get_free_space $disk)
+            echo "可用的未分配空间: $((free_space / 1024))GB"
             read -p "请输入新分区的占用百分比（1-100）: " percentage
             percentage=${percentage%\%}
             if ! [[ "$percentage" =~ ^[0-9]+$ ]] || [ "$percentage" -gt 100 ] || [ "$percentage" -le 0 ]; then
                 echo "错误：请输入1到100之间的数字"
                 continue
             fi
-            create_partition $disk $percentage
+            size=$((free_space * percentage / 100))
+            create_partition $disk $size
             new_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1)
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
             if [ -z "$mount_point" ]; then
