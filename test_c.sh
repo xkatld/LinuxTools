@@ -5,10 +5,10 @@ list_available_disks() {
     lsblk -ndo NAME,SIZE,TYPE | grep disk
 }
 
-# 函数：检查是否有未分配空间（以GB为单位）
+# 函数：检查是否有未分配空间（以MB为单位）
 check_free_space() {
     local disk=$1
-    local free_space=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {gsub("GB",""); print $3}' | tail -n1)
+    local free_space=$(sudo parted /dev/$disk unit MB print free | awk '/Free Space/ {gsub("MB",""); print $3}' | tail -n1)
     echo "${free_space%.*}"  # 去掉小数部分
 }
 
@@ -22,8 +22,10 @@ get_next_partition_number() {
 # 函数：创建分区
 create_partition() {
     local disk=$1
-    local percentage=$2
-    sudo parted /dev/$disk --script mkpart primary 0% ${percentage}%
+    local size=$2
+    local start=$(sudo parted /dev/$disk unit MB print free | awk '/Free Space/ {print $1}' | tail -n1)
+    local end=$(awk "BEGIN {print $start + $size}")
+    sudo parted /dev/$disk --script mkpart primary ${start}MB ${end}MB
     sudo partprobe /dev/$disk
     sleep 2
 }
@@ -111,8 +113,8 @@ while true; do
             fi
             
             free_space=$(check_free_space $disk)
-            echo "可用的未分配空间: ${free_space}GB"
-            read -p "请输入新分区的占用（最大100）: " percentage
+            echo "可用的未分配空间: $((free_space / 1024))GB"
+            read -p "请输入新分区的占用百分比（1-100）: " percentage
 
             # 移除百分号（如果有的话）
             percentage=${percentage%\%}
@@ -122,8 +124,9 @@ while true; do
                 continue
             fi
 
+            size=$((free_space * percentage / 100))
             next_partition_number=$(get_next_partition_number $disk)
-            create_partition $disk $percentage
+            create_partition $disk $size
             
             new_partition="${disk}${next_partition_number}"
             if [ ! -b "/dev/$new_partition" ]; then
