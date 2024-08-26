@@ -12,7 +12,7 @@ create_partition() {
     local size=$2
     echo "创建分区..."
     sudo parted /dev/$disk --script mkpart primary ext4 0% $size
-    partprobe /dev/$disk
+    sudo partprobe /dev/$disk
 }
 
 # 函数：格式化分区
@@ -35,12 +35,38 @@ mount_partition() {
 # 函数：创建swap
 create_swap() {
     local size=$1
-    echo "创建swap分区..."
+    echo "创建swap文件..."
     sudo fallocate -l ${size}G /swapfile
     sudo chmod 600 /swapfile
     sudo mkswap /swapfile
     sudo swapon /swapfile
     echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+    echo "Swap 文件已创建并激活"
+}
+
+# 函数：删除swap
+delete_swap() {
+    if [ -f /swapfile ]; then
+        echo "删除swap文件..."
+        sudo swapoff /swapfile
+        sudo rm /swapfile
+        sudo sed -i '/swapfile/d' /etc/fstab
+        echo "Swap 文件已删除"
+    else
+        echo "未找到 swap 文件"
+    fi
+}
+
+# 函数：显示swap状态
+show_swap_status() {
+    echo "当前 Swap 状态："
+    free -h | grep Swap
+    if [ -f /swapfile ]; then
+        echo "Swap 文件: /swapfile"
+        ls -lh /swapfile
+    else
+        echo "未找到 swap 文件"
+    fi
 }
 
 # 主菜单
@@ -66,9 +92,32 @@ while true; do
             echo "分区已创建并挂载到 $mount_point"
             ;;
         2)
-            read -p "请输入要创建的swap大小（GB）: " swap_size
-            create_swap $swap_size
-            echo "Swap 已创建并激活"
+            while true; do
+                echo "Swap 管理："
+                echo "  a) 创建 swap"
+                echo "  b) 删除 swap"
+                echo "  c) 显示 swap 状态"
+                echo "  d) 返回主菜单"
+                read -p "请选择操作 (a-d): " swap_choice
+                case $swap_choice in
+                    a)
+                        read -p "请输入要创建的swap大小（GB）: " swap_size
+                        create_swap $swap_size
+                        ;;
+                    b)
+                        delete_swap
+                        ;;
+                    c)
+                        show_swap_status
+                        ;;
+                    d)
+                        break
+                        ;;
+                    *)
+                        echo "无效选项，请重新选择"
+                        ;;
+                esac
+            done
             ;;
         3)
             echo "退出脚本"
