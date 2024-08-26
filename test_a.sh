@@ -4,45 +4,50 @@
 if command -v apt &> /dev/null; then
     PKG_MANAGER="apt"
     INSTALL_CMD="apt install -y"
-    UPDATE_CMD="apt update"
+    UPDATE_CMD="apt update -y && apt upgrade -y"
 elif command -v yum &> /dev/null; then
     PKG_MANAGER="yum"
     INSTALL_CMD="yum install -y"
-    UPDATE_CMD="yum check-update"
+    UPDATE_CMD="yum update -y"
 elif command -v dnf &> /dev/null; then
     PKG_MANAGER="dnf"
     INSTALL_CMD="dnf install -y"
-    UPDATE_CMD="dnf check-update"
+    UPDATE_CMD="dnf update -y"
 elif command -v zypper &> /dev/null; then
     PKG_MANAGER="zypper"
     INSTALL_CMD="zypper install -y"
-    UPDATE_CMD="zypper refresh"
+    UPDATE_CMD="zypper update -y"
 elif command -v pacman &> /dev/null; then
     PKG_MANAGER="pacman"
     INSTALL_CMD="pacman -S --noconfirm"
-    UPDATE_CMD="pacman -Sy"
+    UPDATE_CMD="pacman -Syu --noconfirm"
 else
     echo "无法检测到支持的包管理器。"
     exit 1
 fi
 
 # 定义软件包组
-BASE_PACKAGES="wget curl sudo nano unzip zip tar gzip bzip2 xz-utils screen tmux htop net-tools"
+BASE_PACKAGES="wget curl sudo nano unzip zip tar gzip bzip2 xz screen tmux htop net-tools"
 GITHUB_PACKAGES="git git-lfs"
-PYTHON_PACKAGES="python3 python3-pip python3-venv"
+PYTHON_PACKAGES="python3 python3-pip"
 GO_PACKAGES="golang"
-BUILD_PACKAGES="build-essential gcc g++ make autoconf automake libtool"
-NETWORK_PACKAGES="nmap netcat-openbsd tcpdump wireshark tshark iftop"
+BUILD_PACKAGES="gcc g++ make autoconf automake libtool"
+NETWORK_PACKAGES="nmap netcat tcpdump wireshark tshark iftop"
 
 # 安装函数
 install_packages() {
     echo "正在安装: $1"
     sudo $INSTALL_CMD $1
+    if [ $? -ne 0 ]; then
+        echo "安装失败，请检查错误信息。"
+    else
+        echo "安装成功。"
+    fi
 }
 
 # 更新包列表
 update_packages() {
-    echo "正在更新包列表..."
+    echo "正在更新系统..."
     sudo $UPDATE_CMD
 }
 
