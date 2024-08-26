@@ -1,87 +1,91 @@
 #!/bin/bash
 
-# 函数：列出可用磁盘
-list_available_disks() {
-    lsblk -ndo NAME,SIZE,TYPE | grep disk
-}
-
-# 函数：检查是否有未分配空间（以MB为单位）
-check_free_space() {
-    local disk=$1
-    local free_space=$(sudo parted /dev/$disk unit MB print free | awk '/Free Space/ {gsub("MB",""); print $3}' | tail -n1)
-    echo "${free_space%.*}"  # 去掉小数部分
-}
-
-# 函数：获取下一个可用的分区号
-get_next_partition_number() {
-    local disk=$1
-    local last_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1 | grep -o '[0-9]*$')
-    echo $((last_partition + 1))
-}
-
-# 函数：创建分区
 create_partition() {
     local disk=$1
-    local size=$2
-    local start=$(sudo parted /dev/$disk unit MB print free | awk '/Free Space/ {print $1}' | tail -n1)
-    local end=$(awk "BEGIN {print $start + $size}")
-    sudo parted /dev/$disk --script mkpart primary ${start}MB ${end}MB
-    sudo partprobe /dev/$disk
+    local percentage=$2
+
+    expect <<EOF
+spawn fdisk /dev/$disk
+expect "命令(输入 m 获取帮助)："
+send "n\r"
+expect "选择 (默认 p)："
+send "p\r"
+expect "分区号"
+send "\r"
+expect "第一个扇区"
+send "\r"
+expect "上个扇区，+sectors 或 +size{K,M,G,T,P}"
+send "+${percentage}%\r"
+expect "您想移除该签名吗"
+send "y\r"
+expect "命令(输入 m 获取帮助)："
+send "w\r"
+expect eof
+EOF
+
+    partprobe /dev/$disk
     sleep 2
 }
 
-# 函数：格式化分区
-format_partition() {
-    local partition=$1
-    sudo mkfs.ext4 -F /dev/$partition > /dev/null 2>&1
-}
-
-# 函数：挂载分区
-mount_partition() {
+format_and_mount() {
     local partition=$1
     local mount_point=$2
-    sudo mkdir -p $mount_point
-    sudo mount /dev/$partition $mount_point
-    echo "/dev/$partition $mount_point ext4 defaults 0 2" | sudo tee -a /etc/fstab > /dev/null
-    sudo systemctl daemon-reload
+
+    mkfs.ext4 -F /dev/$partition
+    mkdir -p $mount_point
+    mount /dev/$partition $mount_point
+    echo "/dev/$partition $mount_point ext4 defaults 0 2" >> /etc/fstab
+    systemctl daemon-reload
 }
 
-# 函数：删除分区
 delete_partition() {
     local partition=$1
-    local mount_point=$(findmnt -n -o TARGET /dev/$partition)
-    if [ -n "$mount_point" ]; then
-        sudo umount $mount_point
-        sudo sed -i "\|^/dev/$partition|d" /etc/fstab
-    fi
-    sudo parted /dev/${partition:0:3} --script rm ${partition:(-1)}
-    sudo partprobe /dev/${partition:0:3}
+    local disk=${partition:0:3}
+    local part_num=${partition:3}
+
+    # 卸载分区
+    umount /dev/$partition 2>/dev/null
+
+    # 从 fstab 中删除条目
+    sed -i "\|^/dev/$partition|d" /etc/fstab
+
+    # 使用 fdisk 删除分区
+    expect <<EOF
+spawn fdisk /dev/$disk
+expect "命令(输入 m 获取帮助)："
+send "d\r"
+expect "分区号"
+send "$part_num\r"
+expect "命令(输入 m 获取帮助)："
+send "w\r"
+expect eof
+EOF
+
+    partprobe /dev/$disk
+    sleep 2
 }
 
-# 函数：创建swap
 create_swap() {
     local size=$1
-    sudo fallocate -l ${size}G /swapfile
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab > /dev/null
+    fallocate -l ${size}G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo "/swapfile none swap sw 0 0" >> /etc/fstab
     echo "Swap 文件已创建并激活"
 }
 
-# 函数：删除swap
 delete_swap() {
     if [ -f /swapfile ]; then
-        sudo swapoff /swapfile
-        sudo rm /swapfile
-        sudo sed -i '/swapfile/d' /etc/fstab
+        swapoff /swapfile
+        rm /swapfile
+        sed -i '/swapfile/d' /etc/fstab
         echo "Swap 文件已删除"
     else
         echo "未找到 swap 文件"
     fi
 }
 
-# 函数：显示swap状态
 show_swap_status() {
     echo "当前 Swap 状态："
     free -h | grep Swap
@@ -105,45 +109,29 @@ while true; do
     case $choice in
         1)
             echo "可用的硬盘："
-            list_available_disks
+            lsblk -ndo NAME,SIZE,TYPE | grep disk
             read -p "请输入要操作的磁盘名称 (如 vda): " disk
             if [ ! -b "/dev/$disk" ]; then
                 echo "错误：指定的磁盘不存在"
                 continue
             fi
-            
-            free_space=$(check_free_space $disk)
-            echo "可用的未分配空间: $((free_space / 1024))GB"
             read -p "请输入新分区的占用百分比（1-100）: " percentage
-
-            # 移除百分号（如果有的话）
             percentage=${percentage%\%}
-
             if ! [[ "$percentage" =~ ^[0-9]+$ ]] || [ "$percentage" -gt 100 ] || [ "$percentage" -le 0 ]; then
                 echo "错误：请输入1到100之间的数字"
                 continue
             fi
-
-            size=$((free_space * percentage / 100))
-            next_partition_number=$(get_next_partition_number $disk)
-            create_partition $disk $size
-            
-            new_partition="${disk}${next_partition_number}"
-            if [ ! -b "/dev/$new_partition" ]; then
-                echo "错误：新分区 /dev/$new_partition 未成功创建"
-                continue
-            fi
-            
-            format_partition $new_partition
-            
+            create_partition $disk $percentage
+            new_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1)
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
             if [ -z "$mount_point" ]; then
                 mount_point="/mnt/data_$(date +%Y%m%d_%H%M%S)"
             fi
-            mount_partition $new_partition $mount_point
-            echo "新分区 $new_partition 已创建并挂载到 $mount_point"
+            format_and_mount $new_partition $mount_point
+            echo "新分区 /dev/$new_partition 已创建并挂载到 $mount_point"
             ;;
         2)
+            echo "当前分区："
             lsblk -nlo NAME,SIZE,MOUNTPOINT | grep -v "^[sl]"
             read -p "请输入要删除的分区名称 (如 vda3): " partition
             if [ ! -b "/dev/$partition" ]; then
