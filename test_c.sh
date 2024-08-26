@@ -7,10 +7,18 @@ check_free_space() {
     echo "${free_space%.*}"  # 去掉小数部分
 }
 
+# 函数：获取下一个可用的分区号
+get_next_partition_number() {
+    local disk=$1
+    local last_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1 | grep -o '[0-9]*$')
+    echo $((last_partition + 1))
+}
+
 # 函数：创建分区
 create_partition() {
     local disk=$1
     local size=$2
+    local partition_number=$3
     local start=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {print $1}' | tail -n1)
     sudo parted /dev/$disk --script mkpart primary ${start} ${size}GB
     sudo partprobe /dev/$disk
@@ -106,9 +114,15 @@ while true; do
                 continue
             fi
             
-            create_partition $disk $size
+            next_partition_number=$(get_next_partition_number $disk)
+            create_partition $disk $size $next_partition_number
             
-            new_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1)
+            new_partition="${disk}${next_partition_number}"
+            if [ ! -b "/dev/$new_partition" ]; then
+                echo "错误：新分区 /dev/$new_partition 未成功创建"
+                continue
+            fi
+            
             format_partition $new_partition
             
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
