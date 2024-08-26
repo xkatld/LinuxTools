@@ -1,9 +1,18 @@
 #!/bin/bash
 
-# 函数：列出可用磁盘
-list_available_disks() {
-    echo "可用的磁盘："
-    lsblk -d -n -o NAME,SIZE,TYPE | grep disk
+# 函数：列出可用磁盘和分区
+list_disks_and_partitions() {
+    echo "可用的磁盘和分区："
+    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
+}
+
+# 函数：检查分区是否存在
+partition_exists() {
+    if [ -b "/dev/$1" ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # 函数：创建分区
@@ -13,6 +22,8 @@ create_partition() {
     echo "创建分区..."
     sudo parted /dev/$disk --script mkpart primary ext4 0% $size
     sudo partprobe /dev/$disk
+    # 等待新分区被内核识别
+    sleep 2
 }
 
 # 函数：格式化分区
@@ -78,18 +89,43 @@ while true; do
 
     case $choice in
         1)
-            list_available_disks
-            read -p "请输入要分区的磁盘名称 (如 sdb): " disk
-            read -p "请输入分区大小 (如 20G, 50%, 100%FREE): " size
-            create_partition $disk $size
-            partition="${disk}1"  # 假设新创建的分区是第一个分区
-            format_partition $partition
+            list_disks_and_partitions
+            read -p "请输入要操作的磁盘名称 (如 vdb): " disk
+            if [ ! -b "/dev/$disk" ]; then
+                echo "错误：指定的磁盘不存在"
+                continue
+            fi
+            
+            echo "1) 使用现有分区"
+            echo "2) 创建新分区"
+            read -p "请选择操作 (1-2): " partition_choice
+            
+            case $partition_choice in
+                1)
+                    read -p "请输入要使用的分区名称 (如 vdb3): " partition
+                    if ! partition_exists $partition; then
+                        echo "错误：指定的分区不存在"
+                        continue
+                    fi
+                    ;;
+                2)
+                    read -p "请输入新分区大小 (如 20G, 50%, 100%FREE): " size
+                    create_partition $disk $size
+                    partition="${disk}$(lsblk -nlo NAME /dev/$disk | tail -n1 | sed 's/^[^0-9]*//')"
+                    format_partition $partition
+                    ;;
+                *)
+                    echo "无效选项"
+                    continue
+                    ;;
+            esac
+            
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
             if [ -z "$mount_point" ]; then
                 mount_point="/mnt/data_$(date +%Y%m%d_%H%M%S)"
             fi
             mount_partition $partition $mount_point
-            echo "分区已创建并挂载到 $mount_point"
+            echo "分区 $partition 已挂载到 $mount_point"
             ;;
         2)
             while true; do
