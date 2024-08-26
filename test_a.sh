@@ -1,6 +1,18 @@
 #!/bin/bash
 
-# 检测包管理器
+# 检测系统类型和包管理器
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$NAME
+    VER=$VERSION_ID
+elif type lsb_release >/dev/null 2>&1; then
+    OS=$(lsb_release -si)
+    VER=$(lsb_release -sr)
+else
+    OS=$(uname -s)
+    VER=$(uname -r)
+fi
+
 if command -v apt &> /dev/null; then
     PKG_MANAGER="apt"
     INSTALL_CMD="apt install -y"
@@ -9,10 +21,18 @@ elif command -v yum &> /dev/null; then
     PKG_MANAGER="yum"
     INSTALL_CMD="yum install -y"
     UPDATE_CMD="yum update -y"
+    # 检查是否为 CentOS 并安装 EPEL
+    if [[ "$OS" == "CentOS Linux" ]]; then
+        sudo yum install -y epel-release
+    fi
 elif command -v dnf &> /dev/null; then
     PKG_MANAGER="dnf"
     INSTALL_CMD="dnf install -y"
     UPDATE_CMD="dnf update -y"
+    # 检查是否为 CentOS 并安装 EPEL
+    if [[ "$OS" == "CentOS Linux" ]]; then
+        sudo dnf install -y epel-release
+    fi
 elif command -v zypper &> /dev/null; then
     PKG_MANAGER="zypper"
     INSTALL_CMD="zypper install -y"
@@ -53,6 +73,7 @@ update_packages() {
 
 # 主菜单
 while true; do
+    echo "当前系统: $OS $VER"
     echo "请选择要安装的软件包组："
     echo "1) 基础包"
     echo "2) GitHub 相关"
