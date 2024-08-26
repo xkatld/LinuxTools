@@ -14,11 +14,18 @@ list_disks_and_partitions() {
 # 函数：检查是否有未分配空间
 check_free_space() {
     local disk=$1
-    local free_space=$(sudo parted /dev/$disk print free | awk '/Free Space/ {print $3}' | tail -n1)
-    if [ -z "$free_space" ]; then
-        echo "0"
+    local free_space=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {print $3}' | tail -n1 | sed 's/GB//')
+    echo "$free_space"
+}
+
+# 函数：获取下一个可用的分区号
+get_next_partition_number() {
+    local disk=$1
+    local last_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1 | grep -o '[0-9]*$')
+    if [ -z "$last_partition" ]; then
+        echo "1"
     else
-        echo "$free_space"
+        echo $((last_partition + 1))
     fi
 }
 
@@ -26,6 +33,7 @@ check_free_space() {
 create_partition() {
     local disk=$1
     local size=$2
+    local partition_number=$3
     echo "创建分区..."
     sudo parted /dev/$disk --script mkpart primary ext4 0% $size
     sudo partprobe /dev/$disk
@@ -68,24 +76,31 @@ while true; do
             fi
             
             free_space=$(check_free_space $disk)
-            if [ "$free_space" == "0" ]; then
-                echo "错误：该磁盘没有未分配空间"
+            if (( $(echo "$free_space < 0.1" | bc -l) )); then
+                echo "错误：该磁盘没有足够的未分配空间（小于 0.1GB）"
                 continue
             fi
             
-            echo "可用的未分配空间: $free_space"
+            echo "可用的未分配空间: ${free_space}GB"
             read -p "请输入新分区的大小（如 10G，或 100% 使用所有剩余空间）: " size
             
-            echo "警告：即将在 /dev/$disk 上创建新分区。这可能会影响现有数据。"
+            next_partition_number=$(get_next_partition_number $disk)
+            new_partition="${disk}${next_partition_number}"
+            
+            echo "警告：即将在 /dev/$disk 上创建新分区 /dev/$new_partition。这可能会影响现有数据。"
             read -p "是否继续？(y/n): " confirm
             if [ "$confirm" != "y" ]; then
                 echo "操作已取消"
                 continue
             fi
             
-            create_partition $disk $size
+            create_partition $disk $size $next_partition_number
             
-            new_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1)
+            if [ ! -b "/dev/$new_partition" ]; then
+                echo "错误：新分区 /dev/$new_partition 未成功创建"
+                continue
+            fi
+            
             format_partition $new_partition
             
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
