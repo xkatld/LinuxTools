@@ -3,7 +3,10 @@
 # 函数：列出可用磁盘和分区
 list_disks_and_partitions() {
     echo "可用的磁盘和分区："
-    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
+    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE
+    echo ""
+    echo "未分配空间："
+    parted -l | grep "Free Space"
 }
 
 # 函数：检查分区是否存在
@@ -18,11 +21,11 @@ partition_exists() {
 # 函数：创建分区
 create_partition() {
     local disk=$1
-    local size=$2
+    local start=$2
+    local end=$3
     echo "创建分区..."
-    sudo parted /dev/$disk --script mkpart primary ext4 0% $size
+    sudo parted /dev/$disk --script mkpart primary ${start} ${end}
     sudo partprobe /dev/$disk
-    # 等待新分区被内核识别
     sleep 2
 }
 
@@ -30,7 +33,7 @@ create_partition() {
 format_partition() {
     local partition=$1
     echo "格式化分区..."
-    sudo mkfs.ext4 /dev/$partition
+    sudo mkfs.ext4 -F /dev/$partition
 }
 
 # 函数：挂载分区
@@ -41,6 +44,13 @@ mount_partition() {
     sudo mkdir -p $mount_point
     sudo mount /dev/$partition $mount_point
     echo "/dev/$partition $mount_point ext4 defaults 0 2" | sudo tee -a /etc/fstab
+    sudo systemctl daemon-reload
+}
+
+# 函数：获取未分配空间
+get_free_space() {
+    local disk=$1
+    parted /dev/$disk print free | awk '/Free Space/ {print $1 " " $2}'
 }
 
 # 函数：创建swap
@@ -82,6 +92,7 @@ show_swap_status() {
 
 # 主菜单
 while true; do
+    echo "磁盘管理工具"
     echo "1) 创建和挂载硬盘分区"
     echo "2) 管理swap"
     echo "3) 退出"
@@ -90,42 +101,34 @@ while true; do
     case $choice in
         1)
             list_disks_and_partitions
-            read -p "请输入要操作的磁盘名称 (如 vdb): " disk
+            read -p "请输入要操作的磁盘名称 (如 vda): " disk
             if [ ! -b "/dev/$disk" ]; then
                 echo "错误：指定的磁盘不存在"
                 continue
             fi
             
-            echo "1) 使用现有分区"
-            echo "2) 创建新分区"
-            read -p "请选择操作 (1-2): " partition_choice
+            free_space=$(get_free_space $disk)
+            if [ -z "$free_space" ]; then
+                echo "错误：该磁盘没有未分配空间"
+                continue
+            fi
             
-            case $partition_choice in
-                1)
-                    read -p "请输入要使用的分区名称 (如 vdb3): " partition
-                    if ! partition_exists $partition; then
-                        echo "错误：指定的分区不存在"
-                        continue
-                    fi
-                    ;;
-                2)
-                    read -p "请输入新分区大小 (如 20G, 50%, 100%FREE): " size
-                    create_partition $disk $size
-                    partition="${disk}$(lsblk -nlo NAME /dev/$disk | tail -n1 | sed 's/^[^0-9]*//')"
-                    format_partition $partition
-                    ;;
-                *)
-                    echo "无效选项"
-                    continue
-                    ;;
-            esac
+            echo "可用的未分配空间："
+            echo "$free_space"
+            read -p "请输入新分区的起始位置: " start
+            read -p "请输入新分区的结束位置（或输入100%使用所有剩余空间）: " end
+            
+            create_partition $disk $start $end
+            
+            new_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1)
+            format_partition $new_partition
             
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
             if [ -z "$mount_point" ]; then
                 mount_point="/mnt/data_$(date +%Y%m%d_%H%M%S)"
             fi
-            mount_partition $partition $mount_point
-            echo "分区 $partition 已挂载到 $mount_point"
+            mount_partition $new_partition $mount_point
+            echo "新分区 $new_partition 已创建并挂载到 $mount_point"
             ;;
         2)
             while true; do
