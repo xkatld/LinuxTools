@@ -3,10 +3,7 @@
 # 函数：列出可用磁盘和分区
 list_disks_and_partitions() {
     echo "可用的磁盘和分区："
-    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE
-    echo ""
-    echo "未分配空间："
-    parted -l | grep "Free Space"
+    fdisk -l | grep -E "Disk /dev/|/dev/" | grep -v "Disk identifier"
 }
 
 # 函数：检查分区是否存在
@@ -21,11 +18,15 @@ partition_exists() {
 # 函数：创建分区
 create_partition() {
     local disk=$1
-    local start=$2
-    local end=$3
     echo "创建分区..."
-    sudo parted /dev/$disk --script mkpart primary ${start} ${end}
-    sudo partprobe /dev/$disk
+    fdisk /dev/$disk <<EOF
+n
+p
+
+
+w
+EOF
+    partprobe /dev/$disk
     sleep 2
 }
 
@@ -33,7 +34,7 @@ create_partition() {
 format_partition() {
     local partition=$1
     echo "格式化分区..."
-    sudo mkfs.ext4 -F /dev/$partition
+    mkfs.ext4 -F /dev/$partition
 }
 
 # 函数：挂载分区
@@ -41,27 +42,21 @@ mount_partition() {
     local partition=$1
     local mount_point=$2
     echo "挂载分区..."
-    sudo mkdir -p $mount_point
-    sudo mount /dev/$partition $mount_point
-    echo "/dev/$partition $mount_point ext4 defaults 0 2" | sudo tee -a /etc/fstab
-    sudo systemctl daemon-reload
-}
-
-# 函数：获取未分配空间
-get_free_space() {
-    local disk=$1
-    parted /dev/$disk print free | awk '/Free Space/ {print $1 " " $2}'
+    mkdir -p $mount_point
+    mount /dev/$partition $mount_point
+    echo "/dev/$partition $mount_point ext4 defaults 0 2" >> /etc/fstab
+    systemctl daemon-reload
 }
 
 # 函数：创建swap
 create_swap() {
     local size=$1
     echo "创建swap文件..."
-    sudo fallocate -l ${size}G /swapfile
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+    fallocate -l ${size}G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo "/swapfile none swap sw 0 0" >> /etc/fstab
     echo "Swap 文件已创建并激活"
 }
 
@@ -69,9 +64,9 @@ create_swap() {
 delete_swap() {
     if [ -f /swapfile ]; then
         echo "删除swap文件..."
-        sudo swapoff /swapfile
-        sudo rm /swapfile
-        sudo sed -i '/swapfile/d' /etc/fstab
+        swapoff /swapfile
+        rm /swapfile
+        sed -i '/swapfile/d' /etc/fstab
         echo "Swap 文件已删除"
     else
         echo "未找到 swap 文件"
@@ -107,20 +102,16 @@ while true; do
                 continue
             fi
             
-            free_space=$(get_free_space $disk)
-            if [ -z "$free_space" ]; then
-                echo "错误：该磁盘没有未分配空间"
+            echo "警告：即将在 /dev/$disk 上创建新分区。这可能会影响现有数据。"
+            read -p "是否继续？(y/n): " confirm
+            if [ "$confirm" != "y" ]; then
+                echo "操作已取消"
                 continue
             fi
             
-            echo "可用的未分配空间："
-            echo "$free_space"
-            read -p "请输入新分区的起始位置: " start
-            read -p "请输入新分区的结束位置（或输入100%使用所有剩余空间）: " end
+            create_partition $disk
             
-            create_partition $disk $start $end
-            
-            new_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1)
+            new_partition=$(fdisk -l /dev/$disk | tail -n 1 | awk '{print $1}')
             format_partition $new_partition
             
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
