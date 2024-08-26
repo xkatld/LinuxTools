@@ -1,22 +1,13 @@
 #!/bin/bash
 
-get_free_space() {
-    local disk=$1
-    local total_size=$(blockdev --getsize64 /dev/$disk)
-    local used_size=$(fdisk -l /dev/$disk | grep ^/dev | awk '{s+=$5} END {print s}')
-    echo $((($total_size - $used_size) / 1024 / 1024)) # 返回MB为单位的可用空间
-}
-
 create_partition() {
     local disk=$1
-    local size=$2
-
     (
     echo n # 新建分区
     echo p # 主分区
     echo   # 默认分区号
     echo   # 默认起始扇区
-    echo +${size}M # 结束扇区
+    echo   # 默认结束扇区（使用所有可用空间）
     echo w # 写入更改
     ) | fdisk /dev/$disk
 
@@ -103,16 +94,7 @@ while true; do
                 echo "错误：指定的磁盘不存在"
                 continue
             fi
-            free_space=$(get_free_space $disk)
-            echo "可用的未分配空间: $((free_space / 1024))GB"
-            read -p "请输入新分区的占用百分比（1-100）: " percentage
-            percentage=${percentage%\%}
-            if ! [[ "$percentage" =~ ^[0-9]+$ ]] || [ "$percentage" -gt 100 ] || [ "$percentage" -le 0 ]; then
-                echo "错误：请输入1到100之间的数字"
-                continue
-            fi
-            size=$((free_space * percentage / 100))
-            create_partition $disk $size
+            create_partition $disk
             new_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1)
             read -p "请输入挂载点 (如 /mnt/data，留空则自动生成): " mount_point
             if [ -z "$mount_point" ]; then
