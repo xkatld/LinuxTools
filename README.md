@@ -10,3 +10,8 @@ bash <(curl -s https://raw.githubusercontent.com/xkatld/linuxtools/main/test_a.s
 ~~~
 bash <(curl -s https://raw.githubusercontent.com/xkatld/linuxtools/main/test_b.sh)
 ~~~
+# test_c
+创建和挂载硬盘分区以及 swap 管理
+~~~
+bash <(curl -s https://raw.githubusercontent.com/xkatld/linuxtools/main/test_c.sh)
+~~~
