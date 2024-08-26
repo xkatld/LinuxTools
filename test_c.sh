@@ -14,7 +14,7 @@ list_disks_and_partitions() {
 # 函数：检查是否有未分配空间
 check_free_space() {
     local disk=$1
-    local free_space=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {print $3}' | tail -n1 | sed 's/GB//')
+    local free_space=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {gsub("GB",""); print $3}' | tail -n1)
     echo "$free_space"
 }
 
@@ -22,20 +22,16 @@ check_free_space() {
 get_next_partition_number() {
     local disk=$1
     local last_partition=$(lsblk -nlo NAME /dev/$disk | tail -n1 | grep -o '[0-9]*$')
-    if [ -z "$last_partition" ]; then
-        echo "1"
-    else
-        echo $((last_partition + 1))
-    fi
+    echo $((last_partition + 1))
 }
 
 # 函数：创建分区
 create_partition() {
     local disk=$1
     local size=$2
-    local partition_number=$3
+    local start=$(sudo parted /dev/$disk unit GB print free | awk '/Free Space/ {print $1}' | tail -n1)
     echo "创建分区..."
-    sudo parted /dev/$disk --script mkpart primary ext4 0% $size
+    sudo parted /dev/$disk --script mkpart primary ${start} ${size}GB
     sudo partprobe /dev/$disk
     sleep 2
 }
@@ -76,25 +72,30 @@ while true; do
             fi
             
             free_space=$(check_free_space $disk)
-            if (( $(echo "$free_space < 0.1" | bc -l) )); then
-                echo "错误：该磁盘没有足够的未分配空间（小于 0.1GB）"
+            if (( $(echo "$free_space < 1" | bc -l) )); then
+                echo "错误：该磁盘没有足够的未分配空间（小于 1GB）"
                 continue
             fi
             
             echo "可用的未分配空间: ${free_space}GB"
-            read -p "请输入新分区的大小（如 10G，或 100% 使用所有剩余空间）: " size
+            read -p "请输入新分区的大小（GB，最大 ${free_space}GB）: " size
+            
+            if (( $(echo "$size > $free_space" | bc -l) )); then
+                echo "错误：指定的大小超过了可用空间"
+                continue
+            fi
             
             next_partition_number=$(get_next_partition_number $disk)
             new_partition="${disk}${next_partition_number}"
             
-            echo "警告：即将在 /dev/$disk 上创建新分区 /dev/$new_partition。这可能会影响现有数据。"
+            echo "警告：即将在 /dev/$disk 上创建新分区 /dev/$new_partition。"
             read -p "是否继续？(y/n): " confirm
             if [ "$confirm" != "y" ]; then
                 echo "操作已取消"
                 continue
             fi
             
-            create_partition $disk $size $next_partition_number
+            create_partition $disk $size
             
             if [ ! -b "/dev/$new_partition" ]; then
                 echo "错误：新分区 /dev/$new_partition 未成功创建"
@@ -111,7 +112,7 @@ while true; do
             echo "新分区 $new_partition 已创建并挂载到 $mount_point"
             ;;
         2)
-            # Swap 管理代码（保持不变）
+            # Swap 管理代码（此处省略）
             ;;
         3)
             echo "退出脚本"
