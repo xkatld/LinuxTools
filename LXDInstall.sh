@@ -33,6 +33,15 @@ echo "- 手动选择存储后端"
 echo "- 配置网络"
 echo "- 镜像更新选项选择 'no'"
 
-# 禁用镜像自动更新
-echo "正在禁用镜像自动更新..."
-lxc config set core.images_auto_update_interval 0
+if ! command -v lxc &>/dev/null; then
+    if [ -f /snap/bin/lxc ]; then
+        echo 'alias lxc="/snap/bin/lxc"' >> /root/.bashrc
+        echo 'export PATH=$PATH:/snap/bin' >> /root/.bashrc
+        source /root/.bashrc
+        echo "LXC 别名和 PATH 已经设置。"
+    else
+        echo "未找到 LXC 命令。请先安装 LXD。"
+    fi
+else
+    echo "LXC 命令已经在您的 PATH 中可用。"
+fi
