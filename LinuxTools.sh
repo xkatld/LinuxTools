@@ -62,6 +62,11 @@ do
             execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LinuxSWAP.sh"
             read -p "按任意键返回主菜单..." 
             ;;
+        3)
+            echo "正在执行来自LinuxTools的LinuxSSH..."
+            execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/LinuxSSH.sh"
+            read -p "按任意键返回主菜单..." 
+            ;;
         0)
             echo "退出LinuxTools脚本菜单。再见！"
             exit 0
