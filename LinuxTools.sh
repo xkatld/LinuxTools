@@ -46,7 +46,7 @@ main_menu() {
     echo "6. 执行换安装源"
     echo "0. 退出"
     echo "------------------"
-    read -p "请输入您的选择 (0-2)：" choice
+    read -p "请输入您的选择 (0-6)：" choice
 }
 
 # 主程序逻辑
