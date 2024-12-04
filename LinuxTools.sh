@@ -40,7 +40,7 @@ main_menu() {
     echo "LinuxTools脚本菜单"
     echo "------------------"
     echo "1. 执行安装LXD"
-    echo "2. 执行xxx"
+    echo "2. 执行管理Swap"
     echo "0. 退出"
     echo "------------------"
     read -p "请输入您的选择 (0-2)：" choice
