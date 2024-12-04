@@ -41,6 +41,7 @@ main_menu() {
     echo "------------------"
     echo "1. 执行安装LXD"
     echo "2. 执行管理Swap"
+    echo "3. 执行管理SSH"
     echo "0. 退出"
     echo "------------------"
     read -p "请输入您的选择 (0-2)：" choice
