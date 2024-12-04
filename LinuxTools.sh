@@ -1,38 +1,49 @@
 #!/bin/bash
 
-# 脚本1的实现
-script_1() {
-    echo "执行脚本1的操作..."
-    # 在这里添加脚本1的具体逻辑
-    sleep 1
+download_script() {
+    local url="$1"
+    local script_content=$(curl -s "$url")
+    
+    if [ -z "$script_content" ]; then
+        echo "错误：无法从 $url 下载脚本"
+        return 1
+    fi
+    
+    echo "$script_content"
 }
 
-# 脚本2的实现
-script_2() {
-    echo "执行脚本2的操作..."
-    # 在这里添加脚本2的具体逻辑
-    sleep 1
-}
-
-# 脚本3的实现
-script_3() {
-    echo "执行脚本3的操作..."
-    # 在这里添加脚本3的具体逻辑
-    sleep 1
+execute_github_script() {
+    local url="$1"
+    local script_content=$(download_script "$url")
+    
+    if [ $? -eq 0 ]; then
+        # 创建临时脚本文件
+        local temp_script=$(mktemp)
+        echo "$script_content" > "$temp_script"
+        
+        # 使脚本可执行
+        chmod +x "$temp_script"
+        
+        # 执行脚本
+        bash "$temp_script"
+        
+        # 清理临时文件
+        rm "$temp_script"
+    else
+        echo "脚本执行失败"
+    fi
 }
 
 # 主菜单函数
 main_menu() {
     clear
-    echo "脚本合集主菜单"
-    echo "---------------"
-    echo "请选择要执行的脚本:"
-    echo "1. 执行脚本1"
-    echo "2. 执行脚本2"
-    echo "3. 执行脚本3"
+    echo "LinuxTools脚本菜单"
+    echo "------------------"
+    echo "1. 执行安装LXD"
+    echo "2. 执行xxx"
     echo "0. 退出"
-    echo "---------------"
-    read -p "请输入您的选择 (0-3): " choice
+    echo "------------------"
+    read -p "请输入您的选择 (0-2)：" choice
 }
 
 # 主程序逻辑
@@ -42,19 +53,17 @@ do
 
     case $choice in
         1)
-            script_1
+            echo "正在执行来自LinuxTools的LXDInstall..."
+            execute_github_script "https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LXDInstall.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         2)
-            script_2
-            read -p "按任意键返回主菜单..." 
-            ;;
-        3)
-            script_3
+            echo "正在执行来自GitHub的分支脚本1..."
+            execute_github_script "https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LinuxTools.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         0)
-            echo "退出脚本合集。再见！"
+            echo "退出GitHub脚本菜单。再见！"
             exit 0
             ;;
         *)
