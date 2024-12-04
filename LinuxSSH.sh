@@ -5,26 +5,27 @@ if [ -f /etc/os-release ]; then
     . /etc/os-release
     OS=$ID
 else
-    echo "无法确定系统类型，请手动检查OpenSSH server是否已安装。"
+    echo "无法确定系统类型，请手动检查和安装OpenSSH server。"
     exit 1
 fi
 
-# 检查sshd是否已安装
+# 检查并安装sshd
 case "$OS" in
     ubuntu|debian)
         if ! dpkg -l | grep -q openssh-server; then
-            echo "OpenSSH server未安装。请先安装。"
-            exit 1
+            echo "OpenSSH server未安装，正在安装..."
+            sudo apt update
+            sudo apt install -y openssh-server
         fi
         ;;
     centos|rhel|fedora)
         if ! rpm -qa | grep -q openssh-server; then
-            echo "OpenSSH server未安装。请先安装。"
-            exit 1
+            echo "OpenSSH server未安装，正在安装..."
+            sudo yum install -y openssh-server
         fi
         ;;
     *)
-        echo "未识别的系统类型，无法自动检查OpenSSH server是否已安装。请手动检查。"
+        echo "未识别的系统类型，无法自动安装OpenSSH server。请手动安装。"
         exit 1
         ;;
 esac
@@ -42,7 +43,7 @@ if [ "$CUSTOM_PASSWORD" != "$CUSTOM_PASSWORD_CONFIRM" ]; then
 fi
 
 # 提示用户输入自定义端口
-read -p "请输入新的SSH端口（例如：2222）: " CUSTOM_PORT
+read -p "请输入新的SSH端口（例如：22）: " CUSTOM_PORT
 echo
 
 # 验证端口是否为数字
