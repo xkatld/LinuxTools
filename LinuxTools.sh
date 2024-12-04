@@ -37,7 +37,7 @@ execute_github_script() {
 # 主菜单函数
 main_menu() {
     clear
-    echo "LinuxTools脚本菜单"
+    echo "LinuxTools脚本菜单 作者:xkatld"
     echo "------------------"
     echo "1. 执行安装LXD"
     echo "2. 执行管理Swap"
