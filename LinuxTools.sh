@@ -42,6 +42,8 @@ main_menu() {
     echo "1. 执行安装LXD"
     echo "2. 执行管理Swap"
     echo "3. 执行管理SSH"
+    echo "5. 执行安装Docker"
+    echo "6. 执行换安装源"
     echo "0. 退出"
     echo "------------------"
     read -p "请输入您的选择 (0-2)：" choice
@@ -66,6 +68,16 @@ do
         3)
             echo "正在执行来自LinuxTools的LinuxSSH..."
             execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/LinuxSSH.sh"
+            read -p "按任意键返回主菜单..." 
+            ;;
+        5)
+            echo "正在执行来自linuxmirrors的docker..."
+            execute_github_script "https://linuxmirrors.cn/docker.sh"
+            read -p "按任意键返回主菜单..." 
+            ;;
+        6)
+            echo "正在执行来自linuxmirrors的main..."
+            execute_github_script "https://linuxmirrors.cn/main.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         0)
