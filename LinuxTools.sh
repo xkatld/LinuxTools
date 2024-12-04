@@ -58,8 +58,8 @@ do
             read -p "按任意键返回主菜单..." 
             ;;
         2)
-            echo "正在执行来自GitHub的分支脚本1..."
-            execute_github_script "https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LinuxTools.sh"
+            echo "正在执行来自LinuxTools的LinuxSWAP..."
+            execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LinuxSWAP.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         0)
