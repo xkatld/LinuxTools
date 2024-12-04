@@ -54,7 +54,7 @@ do
     case $choice in
         1)
             echo "正在执行来自LinuxTools的LXDInstall..."
-            execute_github_script "https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LXDInstall.sh"
+            execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LXDInstall.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         2)
