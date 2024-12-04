@@ -4,7 +4,7 @@
 ![image](https://github.com/user-attachments/assets/9c3a73c9-7768-473e-a08d-eccaaefb7120)
 
 ~~~
-bash <(curl -s https://ghp.ci/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LinuxTools.sh)
+bash <(curl -s https://ghp.ci/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/LinuxTools.sh)
 ~~~
 # test_b
 ![image](https://github.com/user-attachments/assets/7eec39e0-7217-4dc9-96f8-48f83dae578a)
