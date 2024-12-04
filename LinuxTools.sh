@@ -63,7 +63,7 @@ do
             read -p "按任意键返回主菜单..." 
             ;;
         0)
-            echo "退出GitHub脚本菜单。再见！"
+            echo "退出LinuxTools脚本菜单。再见！"
             exit 0
             ;;
         *)
