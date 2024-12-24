@@ -57,17 +57,17 @@ do
     case $choice in
         1)
             echo "正在执行来自LinuxTools的LXDInstall..."
-            execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LXDInstall.sh"
+            execute_github_script "https://ghgo.xyz/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LXDInstall.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         2)
             echo "正在执行来自LinuxTools的LinuxSWAP..."
-            execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LinuxSWAP.sh"
+            execute_github_script "https://ghgo.xyz/https://raw.githubusercontent.com/xkatld/linuxtools/refs/heads/main/LinuxSWAP.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         3)
             echo "正在执行来自LinuxTools的LinuxSSH..."
-            execute_github_script "https://ghp.ci/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/LinuxSSH.sh"
+            execute_github_script "https://ghgo.xyz/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/LinuxSSH.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         5)
