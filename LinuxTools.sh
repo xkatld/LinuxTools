@@ -44,7 +44,7 @@ main_menu() {
     echo "3. 执行管理SSH"
     echo "5. 执行安装Docker"
     echo "6. 执行换安装源"
-    echo "6. 执行换网络配置备份"
+    echo "7. 执行换网络配置备份"
     echo "0. 退出"
     echo "------------------"
     read -p "请输入您的选择 (0-6)：" choice
