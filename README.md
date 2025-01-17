@@ -6,5 +6,5 @@ bash <(curl -s https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/ma
 ~~~
 ### 内地
 ~~~
-bash <(curl -s https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/LinuxTools.sh)
+bash <(curl -s https://www.ghproxy.cn/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/LinuxTools.sh)
 ~~~
