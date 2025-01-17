@@ -44,6 +44,7 @@ main_menu() {
     echo "3. 执行管理SSH"
     echo "5. 执行安装Docker"
     echo "6. 执行换安装源"
+    echo "6. 执行换网络配置备份"
     echo "0. 退出"
     echo "------------------"
     read -p "请输入您的选择 (0-6)：" choice
@@ -78,6 +79,11 @@ do
         6)
             echo "正在执行来自linuxmirrors的main..."
             execute_github_script "https://linuxmirrors.cn/main.sh"
+            read -p "按任意键返回主菜单..." 
+            ;;
+        7)
+            echo "正在执行来自LinuxTools的网络备份脚本..."
+            execute_github_script "https://www.ghproxy.cn/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/network-backup.sh"
             read -p "按任意键返回主菜单..." 
             ;;
         0)
