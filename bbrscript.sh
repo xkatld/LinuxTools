@@ -18,7 +18,7 @@ KERNEL_VERSION=$(uname -r)
 echo "当前内核版本: $KERNEL_VERSION"
 
 # 检查是否支持BBR v3
-if ! cat /proc/sys/net/ipv4/tcp_available_congestion_control | grep -q "bbr3"; then
+if ! cat /proc/sys/net/ipv4/tcp_available_congestion_control | grep -q "bbr"; then
     echo "当前内核不支持BBR v3，尝试安装更新的内核..."
     
     # 安装backports内核
