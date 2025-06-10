@@ -4,7 +4,7 @@
 # Script Name:    Linux Toolbox (Enhanced)
 # Description:    A robust and user-friendly menu to run various Linux admin scripts.
 # Author:         xkatld & gemini (as 脚本大师)
-# Version:        2.0
+# Version:        2.1
 # Usage:          ./toolbox.sh
 # ==============================================================================
 
@@ -17,7 +17,7 @@ set -o pipefail
 # 使用关联数组存储菜单项，格式：[ID]="菜单描述;脚本URL"
 declare -A SCRIPTS
 SCRIPTS=(
-    ["1"]="LXD 安装与管理;https://raw.githubusercontent.com/xkatld/linuxtools/main/LXDInstall.sh"
+    ["1"]="LXD 安装与镜像管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/lxd-helper.sh"
     ["2"]="SWAP 虚拟内存管理;https://raw.githubusercontent.com/xkatld/linuxtools/main/LinuxSWAP.sh"
     ["3"]="SSH 端口与配置管理;https://raw.githubusercontent.com/xkatld/LinuxTools/main/LinuxSSH.sh"
     ["4"]="Docker 安装 (国内镜像);https://linuxmirrors.cn/docker.sh"
@@ -90,9 +90,9 @@ download_script() {
 execute_remote_script() {
     local url="$1"
     local description="$2"
-    
+
     msg_info "准备执行脚本: ${description}"
-    
+
     # 创建安全的临时文件，并设置 trap 以确保在任何情况下（包括Ctrl+C）都能清理
     local temp_script
     temp_script=$(mktemp)
@@ -144,7 +144,7 @@ show_main_menu() {
     echo -e "${COLOR_BLUE}=========================================${COLOR_NC}"
     echo -e "${COLOR_BLUE}         Linux 工具箱 (作者: xkatld)      ${COLOR_NC}"
     echo -e "${COLOR_BLUE}=========================================${COLOR_NC}"
-    
+
     # 动态生成菜单项
     for key in $(echo "${!SCRIPTS[@]}" | tr ' ' '\n' | sort -n); do
         local item="${SCRIPTS[$key]}"
@@ -162,16 +162,16 @@ show_main_menu() {
 main() {
     check_root
     check_dependencies
-    
+
     while true; do
         show_main_menu
-        
+
         # 检查选择是否存在于我们的脚本数组中
         if [[ -n "${SCRIPTS[$choice]:-}" ]]; then
             local item="${SCRIPTS[$choice]}"
             local description="${item%%;*}"
             local url="${item##*;}" # 分号后是URL
-            
+
             execute_remote_script "$url" "$description"
 
         elif [[ "$choice" == "0" ]]; then
@@ -180,7 +180,7 @@ main() {
         else
             msg_error "无效的选择 '$choice'，请重新输入。"
         fi
-        
+
         echo
         read -n 1 -s -r -p "按任意键返回主菜单..."
     done
