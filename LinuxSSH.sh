@@ -1,8 +1,9 @@
 #!/bin/bash
 
 #================================================================================
-# 脚本名称: LinuxSSH.sh (专家优化版)
-# 功    能: 安全地配置SSH服务，兼容主流发行版、防火墙及SELinux
+# 脚本名称: LinuxSSH.sh (最终修正版)
+# 功    能: 自动修复并安全地配置SSH服务，兼容主流发行版、防火墙及SELinux
+# 修正内容: 自动检测并生成缺失的SSH主机密钥，解决'no hostkeys available'错误
 #================================================================================
 
 # --- 全局变量和颜色定义 ---
@@ -83,6 +84,27 @@ install_sshd() {
     $INSTALL_CMD $SSH_PACKAGE || error "$SSH_PACKAGE 安装失败。"
 }
 
+# === 新增的核心修正功能：检查并生成SSH主机密钥 ===
+generate_ssh_host_keys_if_missing() {
+    # 检查关键的主机密钥文件是否存在
+    if [ ! -f "/etc/ssh/ssh_host_rsa_key" ] || [ ! -f "/etc/ssh/ssh_host_ecdsa_key" ] || [ ! -f "/etc/ssh/ssh_host_ed25519_key" ]; then
+        warn "一个或多个 SSH 主机密钥 (Host Key) 文件丢失。"
+        info "这是导致 'no hostkeys available' 错误的根本原因。"
+        info "正在尝试自动生成所有必需的 SSH 主机密钥..."
+        
+        # 使用 ssh-keygen -A 标志是生成所有类型密钥最简单、最可靠的方法
+        ssh-keygen -A
+        
+        if [ $? -eq 0 ]; then
+            info "SSH 主机密钥已成功生成。"
+        else
+            error "自动生成 SSH 主机密钥失败。请检查权限或手动运行 'ssh-keygen -A' 后再试。"
+        fi
+    else
+        info "SSH 主机密钥完整，无需操作。"
+    fi
+}
+
 # 检查端口是否被占用
 check_port_availability() {
     local port=$1
@@ -161,12 +183,10 @@ test_config() {
     return $?
 }
 
-# 配置SELinux，允许新端口 (新增)
+# 配置SELinux，允许新端口
 configure_selinux() {
-    # 检查semanage是否存在且SELinux是否在运行
     if command -v semanage &>/dev/null && command -v getenforce &>/dev/null && [[ "$(getenforce)" != "Disabled" ]]; then
         info "检测到 SELinux 正在运行。"
-        # 检查新端口是否已在ssh_port_t上下文中
         if ! semanage port -l | grep ssh_port_t | grep -q "\btcp\b\s*$port\b"; then
             info "正在为新端口 $port 配置 SELinux 上下文..."
             semanage port -a -t ssh_port_t -p tcp "$port"
@@ -183,7 +203,7 @@ configure_selinux() {
 }
 
 
-# 配置防火墙 (增强)
+# 配置防火墙
 configure_firewall() {
     if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
         info "检测到 firewalld 正在运行。"
@@ -221,7 +241,7 @@ restart_ssh_service() {
         info "正在重启 $service_name 服务..."
         systemctl restart "$service_name" || error "重启 $service_name 服务失败。"
     elif command -v service &>/dev/null; then
-         if [ -f /etc/init.d/ssh ]; then
+        if [ -f /etc/init.d/ssh ]; then
             service_name="ssh"
         fi
         info "正在重启 $service_name 服务..."
@@ -235,6 +255,10 @@ restart_ssh_service() {
 main() {
     check_root
     install_sshd
+    
+    # 在修改任何配置前，先调用新增的函数检查并修复主机密钥问题
+    generate_ssh_host_keys_if_missing
+    
     get_user_input
     
     local original_config
