@@ -28,7 +28,7 @@ check_root() {
 
 check_dependencies() {
     msg "BLUE" "正在检查核心依赖..."
-    local dependencies=("lxc" "jq")
+    local dependencies=("lxc" "jq" "wc")
     local missing_deps=()
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -51,7 +51,7 @@ is_lxd_installed() {
 }
 
 install_lxd() {
-    msg "BLUE" "--- LXD 环境安装与配置 (APT 方式) ---"
+    msg "BLUE" "--- LXD 环境安装与配置 ---"
     if is_lxd_installed; then
         msg "GREEN" "LXD 已经安装。"
         lxd --version
@@ -104,20 +104,18 @@ backup_images() {
     msg "BLUE" "--- LXD 镜像备份 ---"
     
     msg "YELLOW" "正在获取所有本地镜像列表..."
-    local image_aliases
-    if ! image_aliases=$(lxc image list --format=json | jq -r '.[] | select(.aliases | length > 0) | .aliases[0].name'); then
-        msg "RED" "错误: 使用 'lxc' 和 'jq' 获取镜像列表失败。"
-        return 1
-    fi
+    local image_aliases_list
+    image_aliases_list=$(lxc image list --format=json | jq -r '.[] | select(.aliases | length > 0) | .aliases[0].name')
 
-    if [[ -z "$image_aliases" ]]; then
+    if [[ -z "$image_aliases_list" ]]; then
         msg "RED" "错误: 未找到任何带有别名(alias)的本地 LXD 镜像可供备份。"
         return 1
     fi
     
-    mapfile -t backup_aliases < <(echo "$image_aliases")
-    msg "YELLOW" "检测到 ${#backup_aliases[@]} 个带别名的本地镜像，将逐一备份。"
+    local image_count
+    image_count=$(echo "$image_aliases_list" | wc -l)
 
+    msg "YELLOW" "检测到 ${image_count} 个带别名的本地镜像，将逐一备份。"
     read -p "$(msg "YELLOW" "确认开始备份吗? [y/N]: ")" confirm
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
         msg "BLUE" "操作已由用户取消。"
@@ -133,23 +131,39 @@ backup_images() {
     local success_count=0
     local fail_count=0
 
-    for alias in "${backup_aliases[@]}"; do
+    set +o errexit
+    trap '' SIGHUP SIGINT SIGTERM
+
+    while read -r alias; do
+        if [[ -z "$alias" ]]; then
+            continue
+        fi
         msg "GREEN" "  -> 正在导出 $alias ..."
-        if lxc image export "$alias" "$backup_dir/$alias"; then
+        
+        command lxc image export "$alias" "$backup_dir/$alias" >/dev/null 2>&1
+        local export_status=$?
+
+        if [[ $export_status -eq 0 ]]; then
             msg "GREEN" "     ✓ 导出成功: $backup_dir/$alias.tar.gz"
             ((success_count++))
         else
-            msg "RED" "     ✗ 错误: 导出 '$alias' 失败。"
+            msg "RED" "     ✗ 错误: 导出 '$alias' 失败 (退出码: $export_status)。"
             ((fail_count++))
         fi
-    done
+    done < <(echo "$image_aliases_list")
+    
+    trap - SIGHUP SIGINT SIGTERM
+    set -o errexit
 
     echo ""
     msg "GREEN" "==============================================="
     msg "GREEN" "备份流程完成。"
     msg "GREEN" "成功: $success_count, 失败/跳过: $fail_count"
-    msg "YELLOW" "备份文件列表:"
-    ls -lh "$backup_dir"
+    
+    if [[ $success_count -gt 0 ]]; then
+        msg "YELLOW" "备份文件列表:"
+        ls -lh "$backup_dir"
+    fi
     msg "GREEN" "==============================================="
 }
 
@@ -239,10 +253,10 @@ main_menu() {
     while true; do
         clear
         msg "BLUE" "#############################################"
-        msg "BLUE" "#      LXD 镜像管理助手 (APT 定制版)      #"
+        msg "BLUE" "#            LXD 镜像管理助手             #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
-        echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境 (APT方式)${COLOR_NC}"
+        echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境${COLOR_NC}"
         echo -e "  2) ${COLOR_GREEN}备份所有 LXD 镜像${COLOR_NC}"
         echo -e "  3) ${COLOR_YELLOW}从备份恢复 LXD 镜像${COLOR_NC}"
         echo -e "  4) 列出本地 LXD 镜像"
