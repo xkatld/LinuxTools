@@ -28,13 +28,10 @@ check_root() {
 
 check_dependencies() {
     msg "BLUE" "正在检查核心依赖..."
-    local dependencies=("lxc" "jq" "snap")
+    local dependencies=("lxc" "jq")
     local missing_deps=()
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
-            if [[ "$cmd" == "lxc" && -f "/snap/bin/lxc" ]]; then
-                continue
-            fi
             missing_deps+=("$cmd")
         fi
     done
@@ -50,15 +47,11 @@ check_dependencies() {
 }
 
 is_lxd_installed() {
-    if command -v lxd &>/dev/null || [[ -f "/snap/bin/lxd" ]]; then
-        return 0
-    else
-        return 1
-    fi
+    command -v lxd &>/dev/null
 }
 
 install_lxd() {
-    msg "BLUE" "--- LXD 环境安装与配置 ---"
+    msg "BLUE" "--- LXD 环境安装与配置 (APT 方式) ---"
     if is_lxd_installed; then
         msg "GREEN" "LXD 已经安装。"
         lxd --version
@@ -76,24 +69,23 @@ install_lxd() {
     fi
 
     if ! command -v apt-get &>/dev/null; then
-        msg "RED" "错误: 本安装脚本目前主要为基于 'apt' 的系统 (如 Debian, Ubuntu) 提供自动安装支持。"
+        msg "RED" "错误: 本安装脚本仅支持使用 'apt' 的系统 (如 Debian, Ubuntu)。"
         return 1
     fi
 
-    msg "YELLOW" "检测到 LXD 未安装，即将开始安装流程。"
+    msg "YELLOW" "检测到 LXD 未安装，即将开始 APT 安装流程。"
     read -p "$(msg "YELLOW" "确认开始安装 LXD 吗? [y/N]: ")" confirm
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
         msg "BLUE" "操作已由用户取消。"
         return
     fi
 
-    msg "BLUE" "步骤 1/3: 更新软件包列表..."
+    msg "BLUE" "步骤 1/2: 更新软件包列表..."
     sudo apt-get update -y
-    msg "BLUE" "步骤 2/3: 安装 snapd..."
-    sudo apt-get install -y snapd
-    msg "BLUE" "步骤 3/3: 通过 Snap 安装并初始化 LXD..."
-    if ! sudo snap install lxd; then
-        msg "RED" "通过 Snap 安装 LXD 失败，请检查错误信息。"
+    
+    msg "BLUE" "步骤 2/2: 通过 APT 安装并初始化 LXD..."
+    if ! sudo apt-get install -y lxd; then
+        msg "RED" "通过 APT 安装 LXD 失败，请检查错误信息。"
         return 1
     fi
 
@@ -247,10 +239,10 @@ main_menu() {
     while true; do
         clear
         msg "BLUE" "#############################################"
-        msg "BLUE" "#         LXD 镜像管理助手 (重构版)         #"
+        msg "BLUE" "#      LXD 镜像管理助手 (APT 定制版)      #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
-        echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境${COLOR_NC}"
+        echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境 (APT方式)${COLOR_NC}"
         echo -e "  2) ${COLOR_GREEN}备份所有 LXD 镜像${COLOR_NC}"
         echo -e "  3) ${COLOR_YELLOW}从备份恢复 LXD 镜像${COLOR_NC}"
         echo -e "  4) 列出本地 LXD 镜像"
@@ -279,10 +271,12 @@ main_menu() {
 }
 
 check_root
+check_dependencies
+
 if ! is_lxd_installed; then
     clear
     msg "RED" "检测到您的系统尚未安装 LXD。"
-    read -p "$(msg "YELLOW" "是否立即安装LXD? (需要apt包管理器) [y/N]: ")" install_now
+    read -p "$(msg "YELLOW" "是否立即通过APT安装LXD? [y/N]: ")" install_now
     if [[ "${install_now}" =~ ^[yY]$ ]]; then
         install_lxd
         if ! is_lxd_installed; then
@@ -295,5 +289,4 @@ if ! is_lxd_installed; then
     fi
 fi
 
-check_dependencies
 main_menu
