@@ -2,7 +2,7 @@
 
 #================================================================================
 # 脚本名称: LinuxSSH.sh (全面优化版)
-# 功    能: 安全地配置SSH服务，包括安装、设置密码、更换端口、并提供备份与回滚机制
+# 功    能: 安全地配置SSH服务，包括安装、设置密码、更换端口、并提供备份与回滚机制
 #================================================================================
 
 # --- 全局变量和颜色定义 ---
@@ -33,7 +33,7 @@ error() {
 # 检查脚本是否以root权限运行
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-       error "此脚本必须以root权限运行"
+        error "此脚本必须以root权限运行"
     fi
 }
 
@@ -83,16 +83,19 @@ install_sshd() {
     $INSTALL_CMD $SSH_PACKAGE || error "$SSH_PACKAGE 安装失败。"
 }
 
-# 检查端口是否被占用
+# 检查端口是否被占用 (已修复)
 check_port_availability() {
     local port=$1
     info "正在检查端口 $port 是否可用..."
-    if (command -v ss &>/dev/null && ss -tln | grep -q ":$port ") || (command -v netstat &>/dev/null && netstat -tln | grep -q ":$port "); then
-        return 1
+    # 使用ss或netstat，并通过awk和grep精确匹配端口，避免误判 (例如 22 vs 8022)
+    if (command -v ss &>/dev/null && ss -tln | awk '{print $4}' | grep -q ":${port}$") || \
+       (command -v netstat &>/dev/null && netstat -tln | awk '{print $4}' | grep -q ":${port}$"); then
+        return 1 # 端口被占用
     else
-        return 0
+        return 0 # 端口可用
     fi
 }
+
 
 # 获取用户输入
 get_user_input() {
@@ -128,31 +131,29 @@ get_user_input() {
     done
 }
 
-# 应用配置更改
+# 应用配置更改 (已修复)
 apply_config_changes() {
     info "正在应用配置更改..."
     echo "root:$password" | chpasswd || error "设置root密码失败。"
 
-    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' "$SSHD_CONFIG"
-    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$SSHD_CONFIG"
+    # 使用更健壮的sed命令来修改或添加配置
+    sed -i -E "s/^[[:space:]]*#?[[:space:]]*PermitRootLogin.*/PermitRootLogin yes/" "$SSHD_CONFIG"
+    sed -i -E "s/^[[:space:]]*#?[[:space:]]*PasswordAuthentication.*/PasswordAuthentication yes/" "$SSHD_CONFIG"
     
-    if grep -q "^#\?Port" "$SSHD_CONFIG"; then
-        sed -i "s/^#\?Port.*/Port $port/" "$SSHD_CONFIG"
+    # 检查Port配置是否存在，不存在则追加，存在则修改
+    if grep -qE "^[[:space:]]*#?[[:space:]]*Port" "$SSHD_CONFIG"; then
+        sed -i -E "s/^[[:space:]]*#?[[:space:]]*Port.*/Port $port/" "$SSHD_CONFIG"
     else
         echo "Port $port" >> "$SSHD_CONFIG"
     fi
 }
 
-# 测试SSH配置文件的语法
+# 测试SSH配置文件的语法 (已修复)
 test_config() {
     info "正在测试SSH配置文件语法..."
-    if sshd -t; then
-        info "配置文件语法正确。"
-        return 0
-    else
-        error "SSH配置文件语法错误！"
-        return 1
-    fi
+    # 只返回命令的退出状态码，不直接报错退出
+    sshd -t
+    return $?
 }
 
 # 配置防火墙
@@ -179,6 +180,7 @@ configure_firewall() {
 restart_ssh_service() {
     local service_name="sshd"
     if command -v systemctl &>/dev/null; then
+        # 兼容Debian/Ubuntu(ssh.service)和CentOS/RHEL(sshd.service)
         if systemctl list-unit-files | grep -q '^ssh.service'; then
             service_name="ssh"
         fi
@@ -201,15 +203,19 @@ main() {
     install_sshd
     get_user_input
     
+    # 在修改前将原始配置读入变量，用于可能的回滚
     local original_config=$(cat "$SSHD_CONFIG")
     backup_config
     apply_config_changes
     
+    # 测试新配置，如果失败则回滚 (已修复)
     if ! test_config; then
-        warn "操作已中止，正在恢复原始配置文件..."
-        echo "$original_config" > "$SSHD_CONFIG"
+        warn "SSH配置文件语法错误！操作已中止，正在恢复原始配置文件..."
+        # 使用printf恢复配置，比echo更安全
+        printf "%s" "$original_config" > "$SSHD_CONFIG"
         error "已恢复原始配置，系统未做任何更改。"
     fi
+    info "配置文件语法正确。"
     
     configure_firewall
     restart_ssh_service
