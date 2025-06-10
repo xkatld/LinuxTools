@@ -4,7 +4,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-readonly BACKUPS_ROOT_DIR="/root/lxc_image_backups"
+readonly BACKUPS_ROOT_DIR="/root/lxc_image_backups/lxc_image_backups"
 
 readonly COLOR_GREEN='\033[0;32m'
 readonly COLOR_YELLOW='\033[1;33m'
