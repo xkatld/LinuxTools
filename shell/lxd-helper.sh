@@ -1,27 +1,20 @@
 #!/bin/bash
 #
 # ====================================================================
-# Script Name:    LXD 镜像管理助手 (LXD Image Management Helper) v2.1
+# Script Name:    LXD 镜像管理助手 (LXD Image Management Helper) v2.2
 # Author:         xkatld & gemini
 # Description:    一个专业、健壮、用户友好的LXD镜像管理工具，集
 #                 成了安装、备份、恢复和查看功能。
+#                 v2.2: 修复了镜像列表解析的Bug，并引入'jq'以实现更可靠的输出处理。
 # Usage:          sudo bash /path/to/lxd-helper.sh
 # ====================================================================
 
 # --- 脚本核心行为设定 ---
-# 这三个命令让脚本变得更安全、更可预测：
-# -e: 任何命令执行失败，脚本立即退出。
-# -u: 尝试使用未定义的变量，脚本会报错并退出。
-# -o pipefail: 管道中的任何一个命令失败，整个管道都算失败。
 set -o errexit
 set -o nounset
 set -o pipefail
 
 # --- 可配置变量 (Configurable Area) ---
-# 将所有可配置项集中于此，方便修改。
-
-# 预设要备份的镜像别名列表 (用于 "预设列表备份" 功能)
-# 在此数组中添加或删除您自己的镜像别名。
 readonly PRESET_ALIASES=(
     "almalinux8-amd64-ssh"
     "almalinux9-amd64-ssh"
@@ -32,11 +25,7 @@ readonly PRESET_ALIASES=(
     "ubuntu24-04-amd64-ssh"
     "rockylinux9-amd64-ssh"
 )
-
-# 备份文件存放的根目录
-# 脚本会自动在此目录下创建带时间戳的子目录。
 readonly BACKUPS_ROOT_DIR="/root/lxc_image_backups"
-
 
 # --- 样式与颜色定义 (Style and Color Definitions) ---
 readonly COLOR_GREEN='\033[0;32m'
@@ -45,11 +34,8 @@ readonly COLOR_RED='\033[0;31m'
 readonly COLOR_BLUE='\033[0;34m'
 readonly COLOR_NC='\033[0m' # No Color / Reset
 
-
 # --- 辅助函数 (Utility Functions) ---
 
-# 功能: 打印带有颜色的消息，使输出更具可读性。
-# 用法: msg "GREEN" "这是一条成功消息"
 msg() {
     local color_name="$1"
     local message="$2"
@@ -57,48 +43,50 @@ msg() {
     echo -e "${!color_var}${message}${COLOR_NC}"
 }
 
-# 功能: 检查脚本运行所必需的外部命令。
 check_dependencies() {
     msg "BLUE" "Step 1: 检查核心依赖..."
-    local dependencies=("lxc" "find" "sort" "mkdir" "id")
+    # 新增了 jq 作为核心依赖，用于可靠地解析LXD的JSON输出
+    local dependencies=("lxc" "find" "sort" "mkdir" "id" "jq")
     local missing_deps=()
+    local apt_missing=()
 
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
-            # 'lxc' 命令特殊处理，因为脚本可以安装它
             if [[ "$cmd" == "lxc" ]]; then
-                continue
+                continue # LXD可以由脚本自己安装，跳过
             fi
             missing_deps+=("$cmd")
+            # 如果是apt系，记录下来以便给出安装提示
+            if command -v apt-get &> /dev/null; then
+                 apt_missing+=("$cmd")
+            fi
         fi
     done
 
     if [ ${#missing_deps[@]} -gt 0 ]; then
         msg "RED" "错误: 脚本运行缺少以下核心命令: ${missing_deps[*]}"
-        msg "RED" "请先安装它们，然后再运行脚本。"
+        if [ ${#apt_missing[@]} -gt 0 ]; then
+            msg "YELLOW" "在 Debian/Ubuntu 系统上，您可以通过以下命令安装它们:"
+            msg "YELLOW" "sudo apt-get update && sudo apt-get install -y ${apt_missing[*]}"
+        fi
         exit 1
     fi
     msg "GREEN" "核心依赖检查通过。"
 }
 
-# 功能: 检查LXD是否已安装。
 is_lxd_installed() {
     command -v lxd &> /dev/null
 }
 
-
 # --- 核心功能函数 (Core Functions) ---
 
-# 功能: 安装并初始化 LXD。
 install_lxd() {
     msg "BLUE" "--- LXD 环境安装与配置 ---"
-
+    # ... 此函数无变化 ...
     if ! command -v apt &> /dev/null; then
         msg "RED" "错误: 本安装脚本仅支持使用 'apt' 的系统 (如 Debian, Ubuntu)。"
         return 1
     fi
-
-    # 如果已安装，提供重新初始化的选项
     if is_lxd_installed; then
         msg "GREEN" "LXD 已经安装。"
         lxd --version
@@ -113,15 +101,12 @@ install_lxd() {
         fi
         return 0
     fi
-
-    # 如果未安装，则执行安装流程
     msg "YELLOW" "检测到 LXD 未安装，即将开始安装流程。"
     read -p "$(msg "YELLOW" "确认开始安装 LXD 吗? [y/N]: ")" confirm
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
         msg "BLUE" "操作已由用户取消。"
         return
     fi
-
     msg "BLUE" "步骤 1/3: 更新软件包列表..."
     apt-get update -y
     msg "BLUE" "步骤 2/3: 安装 snapd..."
@@ -131,12 +116,10 @@ install_lxd() {
         msg "RED" "通过 Snap 安装 LXD 失败，请检查错误信息。"
         return 1
     fi
-
     if ! lxd init --auto; then
         msg "RED" "LXD 初始化 (lxd init --auto) 失败，请检查错误信息。"
         return 1
     fi
-
     echo ""
     msg "GREEN" "==============================================="
     msg "GREEN" " ✓ LXD 安装并初始化完成！"
@@ -144,25 +127,31 @@ install_lxd() {
     msg "GREEN" "==============================================="
 }
 
-# 功能: 备份LXD镜像。
 backup_images() {
     msg "BLUE" "--- LXD 镜像备份 ---"
     
     local backup_aliases=()
     echo "请选择要备份的镜像范围:"
-    echo "  1) 备份所有本地镜像"
+    echo "  1) 备份所有本地镜像 (仅限有别名的)"
     echo "  2) 备份预设列表中的镜像 (${#PRESET_ALIASES[@]} 个)"
     read -p "请输入选项 [1-2]: " choice
 
     case "$choice" in
         1)
-            msg "YELLOW" "正在获取所有本地镜像列表..."
-            mapfile -t backup_aliases < <(lxc image list --format=csv -c a)
-            if [ ${#backup_aliases[@]} -eq 0 ]; then
-                msg "RED" "错误: 未找到任何本地 LXD 镜像可供备份。"
+            msg "YELLOW" "正在获取所有带别名的本地镜像列表 (需要 'jq')..."
+            # 【关键修复】使用 jq 解析 JSON 输出，确保只获取真实存在的别名
+            # 这可以从根本上避免解析纯文本可能带来的各种问题（如您遇到的错误）
+            if ! mapfile -t backup_aliases < <(lxc image list --format=json | jq -r '.[].aliases[].name'); then
+                msg "RED" "错误: 使用 'lxc' 和 'jq' 获取镜像列表失败。"
+                msg "RED" "请确保 LXD 运行正常且 'jq' 已安装。"
                 return 1
             fi
-            msg "YELLOW" "将要备份所有 ${#backup_aliases[@]} 个本地镜像。"
+            
+            if [ ${#backup_aliases[@]} -eq 0 ]; then
+                msg "RED" "错误: 未找到任何带有别名(alias)的本地 LXD 镜像可供备份。"
+                return 1
+            fi
+            msg "YELLOW" "将要备份所有 ${#backup_aliases[@]} 个带别名的本地镜像。"
             ;;
         2)
             backup_aliases=("${PRESET_ALIASES[@]}")
@@ -189,10 +178,9 @@ backup_images() {
     local success_count=0
     local fail_count=0
     for alias in "${backup_aliases[@]}"; do
-        if [[ -z "$alias" ]]; then continue; fi
-
+        # 即使列表很干净，也保留此检查作为“深度防御”，以防万一
         if ! lxc image info "$alias" &>/dev/null; then
-            msg "RED" "  -> 警告: 镜像 '$alias' 不存在, 已跳过。"
+            msg "RED" "  -> 警告: 预设的镜像 '$alias' 在本地不存在, 已跳过。"
             ((fail_count++))
             continue
         fi
@@ -216,19 +204,15 @@ backup_images() {
     msg "GREEN" "==============================================="
 }
 
-# 功能: 从备份文件恢复LXD镜像。
 restore_images() {
     msg "BLUE" "--- LXD 镜像恢复 ---"
-
+    # ... 此函数无变化 ...
     if ! [ -d "$(dirname "${BACKUPS_ROOT_DIR}")" ]; then
          msg "RED" "错误: 备份根目录 '$(dirname "${BACKUPS_ROOT_DIR}")' 不存在。"
          return 1
     fi
-    
     local backup_dirs=()
-    # 使用 find -print0 和 xargs -0 来安全处理可能包含特殊字符的路径，这是最健壮的方式
     mapfile -t backup_dirs < <(find "$(dirname "${BACKUPS_ROOT_DIR}")" -maxdepth 1 -type d -name "$(basename "${BACKUPS_ROOT_DIR}")_*" -print0 | xargs -0 ls -td)
-
     local restore_dir=""
     if [ ${#backup_dirs[@]} -eq 0 ]; then
         msg "YELLOW" "未自动找到任何备份目录 (如: ${BACKUPS_ROOT_DIR}_*)。"
@@ -251,33 +235,25 @@ restore_images() {
         fi
         restore_dir="${backup_dirs[$((choice-1))]}"
     fi
-
     msg "YELLOW" "将从以下目录恢复: $restore_dir"
     if [ ! -d "$restore_dir" ] || ! ls -A "$restore_dir" | grep -q "."; then
         msg "RED" "错误: 目录 '$restore_dir' 不存在或为空。"
         return 1
     fi
-
-    # 查找所有镜像文件 (tar.gz, .squashfs)
     local image_files=()
     mapfile -t image_files < <(find "$restore_dir" -maxdepth 1 -type f \( -name "*.tar.gz" -o -name "*.squashfs" \))
-
     if [ ${#image_files[@]} -eq 0 ]; then
         msg "RED" "错误: 在 '$restore_dir' 目录内没有找到任何镜像文件 (*.tar.gz, *.squashfs)。"
         return 1
     fi
-
     for file in "${image_files[@]}"; do
         local alias
         alias=$(basename "$file" | sed 's/\.tar\.gz$//;s/\.squashfs$//')
-        
         msg "BLUE" "-------------------------------------------"
         msg "YELLOW" "准备恢复镜像: $alias"
-
         if lxc image info "$alias" &>/dev/null; then
             msg "RED" "警告：此操作是不可逆的！"
             read -p "$(msg "YELLOW" "镜像 '$alias' 已存在。是否删除旧镜像并覆盖? [y/N]: ")" overwrite
-            
             if [[ "${overwrite}" =~ ^[yY]$ ]]; then
                 msg "RED" "  -> 危险操作: 正在删除旧镜像 '$alias'..."
                 if ! lxc image delete "$alias"; then
@@ -290,7 +266,6 @@ restore_images() {
                 continue
             fi
         fi
-
         echo "  -> 正在从文件导入: $file"
         if lxc image import "$file" --alias "$alias"; then
             msg "GREEN" "  -> ✓ 成功导入 '$alias'。"
@@ -298,7 +273,6 @@ restore_images() {
             msg "RED" "  -> ✗ 错误: 导入 '$alias' 失败。"
         fi
     done
-    
     echo ""
     msg "GREEN" "==============================================="
     msg "GREEN" "镜像恢复流程已完成。"
@@ -306,15 +280,13 @@ restore_images() {
     msg "GREEN" "==============================================="
 }
 
-# 功能: 显示主菜单并处理用户选择。
 main_menu() {
-    # 确保备份根目录的父目录存在
+    # ... 此函数无变化 ...
     mkdir -p "$(dirname "${BACKUPS_ROOT_DIR}")"
-
     while true; do
         clear
         msg "BLUE" "#############################################"
-        msg "BLUE" "#         LXD 镜像管理助手 v2.1         #"
+        msg "BLUE" "#         LXD 镜像管理助手 v2.2         #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
         echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境${COLOR_NC}"
@@ -345,19 +317,18 @@ main_menu() {
     done
 }
 
-
 # --- 脚本入口 (Script Entrypoint) ---
 
-# 0. 权限检查：必须以root身份运行
+# 0. 权限检查
 if [ "$(id -u)" -ne 0 ]; then
    msg "RED" "错误: 此脚本必须以 root 权限运行。请使用 'sudo bash $0'"
    exit 1
 fi
 
-# 1. 环境检查：检查核心依赖
+# 1. 环境检查
 check_dependencies
 
-# 2. 引导逻辑：如果LXD未安装，引导用户安装
+# 2. 引导逻辑
 if ! is_lxd_installed; then
     clear
     msg "YELLOW" "#####################################################"
@@ -370,7 +341,6 @@ if ! is_lxd_installed; then
         case $choice in
             "安装 LXD")
                 install_lxd
-                # 安装后，如果LXD仍然不存在，则退出
                 if ! is_lxd_installed; then
                     msg "RED" "安装过程似乎未成功，脚本即将退出。"
                     exit 1
