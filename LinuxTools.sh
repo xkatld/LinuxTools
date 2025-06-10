@@ -15,7 +15,7 @@ declare -A SCRIPTS
 SCRIPTS=(
     ["1"]="LXD 安装与镜像管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/lxd-helper.sh"
     ["2"]="虚拟内存综合管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/virtual-memory-manager.sh"
-    ["3"]="SSH 端口与配置管理;https://raw.githubusercontent.com/xkatld/LinuxTools/main/LinuxSSH.sh"
+    ["3"]="linuxmirrors综合脚本;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/linuxmirrors.sh"
     ["4"]="Docker 安装 (国内镜像);https://linuxmirrors.cn/docker.sh"
     ["5"]="更换系统软件源 (国内镜像);https://linuxmirrors.cn/main.sh"
     ["6"]="网络配置备份;https://raw.githubusercontent.com/xkatld/LinuxTools/main/network-backup.sh"
