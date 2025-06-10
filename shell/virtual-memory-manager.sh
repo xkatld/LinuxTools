@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # ====================================================================
-# Script Name:    虚拟内存管理脚本 (Virtual Memory Manager) v1.1
+# Script Name:    虚拟内存管理脚本 (Virtual Memory Manager) v1.2
 # Author:         xkatld & gemini
 # Description:    一个集成了 ZRAM 和 传统 Swap 文件管理功能的专业工具，
 #                 旨在安全、便捷地优化系统虚拟内存。
@@ -48,7 +48,7 @@ initial_checks() {
     fi
 
     # 3. 核心依赖检查
-    local dependencies=("free" "grep" "sed" "awk" "systemctl")
+    local dependencies=("free" "grep" "sed" "awk" "systemctl" "dpkg")
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             msg "RED" "错误: 缺少核心命令 '$cmd'，请先安装它。"
@@ -63,7 +63,6 @@ initial_checks() {
 show_status() {
     msg "BLUE" "--- 当前系统虚拟内存状态 ---"
     echo "Swap 摘要:"
-    # swapon --summary 可能会在没有 swap 时报错, 用 || true 忽略错误
     swapon --summary || msg "YELLOW" "  -> 当前没有活动的 Swap 设备。"
     echo ""
     echo "内存使用情况:"
@@ -71,8 +70,21 @@ show_status() {
     echo "------------------------------------"
 }
 
+# --- ZRAM 管理功能 (已重构) ---
 
-# --- ZRAM 管理功能 ---
+# 功能: 智能侦测 ZRAM 的服务和配置文件名
+# 输出: "配置文件路径 服务名" 或 空字符串
+detect_zram_config() {
+    if [[ -f /lib/systemd/system/zramswap.service ]]; then
+        # 这是新版/常见的 zram-tools 使用的名称 (如 Debian Bookworm)
+        echo "/etc/default/zramswap zramswap.service"
+    elif [[ -f /lib/systemd/system/zram-config.service ]]; then
+        # 这是某些旧版或不同发行版可能使用的名称
+        echo "/etc/default/zram-config zram-config.service"
+    else
+        echo ""
+    fi
+}
 
 # 功能: 配置并启用 ZRAM
 configure_zram() {
@@ -83,8 +95,20 @@ configure_zram() {
     fi
 
     msg "YELLOW" "正在安装 zram-tools..."
-    # 使用DEBIAN_FRONTEND=noninteractive避免安装过程中的交互提示
     DEBIAN_FRONTEND=noninteractive apt-get update -y && apt-get install -y zram-tools
+
+    # 调用侦测器来获取正确的配置信息
+    local zram_details
+    zram_details=$(detect_zram_config)
+    if [[ -z "$zram_details" ]]; then
+        msg "RED" "错误: 安装 zram-tools 后，未能侦测到任何已知的 ZRAM 服务文件。无法继续配置。"
+        return 1
+    fi
+    # 将侦测结果读取到独立变量中
+    local config_file
+    local service_name
+    read -r config_file service_name <<< "$zram_details"
+    msg "GREEN" "侦测到 ZRAM 配置文件: $config_file, 服务名: $service_name"
 
     local zram_size
     while true; do
@@ -96,48 +120,26 @@ configure_zram() {
         fi
     done
 
-    msg "YELLOW" "正在配置 ZRAM 服务..."
-    # 不同发行版的zram-tools包，其服务和配置文件名可能不同
-    # 此处选择兼容性较好的 zram-config 方式
-    local zram_config_file="/etc/default/zram-config"
-    local zram_service_name="zram-config.service"
-    
-    # 写入配置
-    echo -e "ALGO=zstd\nSIZE=${zram_size}" > "$zram_config_file"
+    msg "YELLOW" "正在向 '$config_file' 写入配置..."
+    # 写入 zstd 压缩算法和用户指定的大小
+    echo -e "ALGO=zstd\nSIZE=${zram_size}" > "$config_file"
 
-    # 重启服务以应用配置
-    msg "YELLOW" "正在重启 ZRAM 服务 ($zram_service_name)..."
-    systemctl restart "$zram_service_name"
+    msg "YELLOW" "正在重启 ZRAM 服务 ($service_name) 以应用配置..."
+    systemctl restart "$service_name"
 
     echo ""
     msg "GREEN" "✓ ZRAM 已成功配置并启用！"
 }
 
-# 功能: 移除 ZRAM (已优化)
+# 功能: 移除 ZRAM
 remove_zram() {
     msg "BLUE" "--- [ZRAM] 移除 ZRAM ---"
     
-    # 定义一个包含所有可能的 ZRAM 服务名称的数组
-    local possible_services=("zram-config.service" "zramswap.service")
-    local active_service=""
-
-    # 智能检测哪个服务当前是活动的
-    for service in "${possible_services[@]}"; do
-        if systemctl is-active --quiet "$service"; then
-            active_service="$service"
-            msg "GREEN" "检测到活动的 ZRAM 服务: $active_service"
-            break
-        fi
-    done
-
-    # 检查 zram-tools 包是否存在
-    local zram_tools_installed=false
-    if dpkg -s "zram-tools" &>/dev/null; then
-        zram_tools_installed=true
-    fi
-
-    if [[ -z "$active_service" && "$zram_tools_installed" = false ]]; then
-        msg "RED" "错误: 未检测到活动的 ZRAM 服务或 zram-tools 包，无需移除。"
+    local zram_details
+    zram_details=$(detect_zram_config)
+    
+    if [[ -z "$zram_details" ]] && ! dpkg -s "zram-tools" &>/dev/null; then
+        msg "RED" "错误: 未检测到 ZRAM 服务或 zram-tools 包，无需移除。"
         return 1
     fi
 
@@ -148,17 +150,17 @@ remove_zram() {
         return
     fi
 
-    # 如果检测到了活动的服务，则停止它
-    if [[ -n "$active_service" ]]; then
-        msg "YELLOW" "正在停止并禁用服务: $active_service..."
-        systemctl stop "$active_service"
-        systemctl disable "$active_service"
-    else
-        msg "YELLOW" "未找到活动的 ZRAM 服务，跳过停止服务步骤。"
+    if [[ -n "$zram_details" ]]; then
+        local service_name
+        service_name=$(echo "$zram_details" | awk '{print $2}')
+        if systemctl is-active --quiet "$service_name"; then
+            msg "YELLOW" "正在停止并禁用服务: $service_name..."
+            systemctl stop "$service_name"
+            systemctl disable "$service_name"
+        fi
     fi
 
-    # 如果 zram-tools 包已安装，则卸载它
-    if [[ "$zram_tools_installed" = true ]]; then
+    if dpkg -s "zram-tools" &>/dev/null; then
         msg "YELLOW" "正在卸载 zram-tools 并清理配置..."
         apt-get purge -y zram-tools
     fi
@@ -171,6 +173,7 @@ remove_zram() {
 # --- Swap 文件管理功能 (无变动) ---
 create_swap_file() {
     msg "BLUE" "--- [Swap文件] 添加 Swap 文件 ---"
+    # ... (此处代码无变化)
     if grep -q "${SWAP_FILE_PATH}" /etc/fstab; then
         msg "RED" "错误: Swap 文件 '${SWAP_FILE_PATH}' 的配置已存在于 /etc/fstab。"
         return 1
@@ -201,6 +204,7 @@ create_swap_file() {
 
 remove_swap_file() {
     msg "BLUE" "--- [Swap文件] 移除 Swap 文件 ---"
+    # ... (此处代码无变化)
     if ! grep -q "${SWAP_FILE_PATH}" /etc/fstab && [ ! -f "${SWAP_FILE_PATH}" ]; then
         msg "RED" "错误: 未找到 Swap 文件或其配置，无需移除。"
         return 1
@@ -230,7 +234,7 @@ main_menu() {
     while true; do
         clear
         msg "BLUE" "##################################################"
-        msg "BLUE" "#         虚拟内存管理脚本 (v1.1)          #"
+        msg "BLUE" "#         虚拟内存管理脚本 (v1.2)          #"
         msg "BLUE" "##################################################"
         show_status
         echo "请选择操作:"
