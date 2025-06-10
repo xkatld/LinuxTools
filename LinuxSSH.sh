@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #================================================================================
-# 脚本名称: LinuxSSH.sh (全面优化版)
-# 功    能: 安全地配置SSH服务，包括安装、设置密码、更换端口、并提供备份与回滚机制
+# 脚本名称: LinuxSSH.sh (专家优化版)
+# 功    能: 安全地配置SSH服务，兼容主流发行版、防火墙及SELinux
 #================================================================================
 
 # --- 全局变量和颜色定义 ---
@@ -83,11 +83,10 @@ install_sshd() {
     $INSTALL_CMD $SSH_PACKAGE || error "$SSH_PACKAGE 安装失败。"
 }
 
-# 检查端口是否被占用 (已修复)
+# 检查端口是否被占用
 check_port_availability() {
     local port=$1
     info "正在检查端口 $port 是否可用..."
-    # 使用ss或netstat，并通过awk和grep精确匹配端口，避免误判 (例如 22 vs 8022)
     if (command -v ss &>/dev/null && ss -tln | awk '{print $4}' | grep -q ":${port}$") || \
        (command -v netstat &>/dev/null && netstat -tln | awk '{print $4}' | grep -q ":${port}$"); then
         return 1 # 端口被占用
@@ -95,7 +94,6 @@ check_port_availability() {
         return 0 # 端口可用
     fi
 }
-
 
 # 获取用户输入
 get_user_input() {
@@ -117,7 +115,7 @@ get_user_input() {
     done
 
     while true; do
-        read -p "请输入新的SSH端口 (1-65535): " port
+        read -p "请输入新的SSH端口 (1-65535, 建议22以外的端口): " port
         if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
             warn "无效的端口号。请输入1-65535之间的数字。"
             continue
@@ -131,37 +129,66 @@ get_user_input() {
     done
 }
 
-# 应用配置更改 (已修复)
+# 应用配置更改
 apply_config_changes() {
     info "正在应用配置更改..."
     echo "root:$password" | chpasswd || error "设置root密码失败。"
 
-    # 使用更健壮的sed命令来修改或添加配置
-    sed -i -E "s/^[[:space:]]*#?[[:space:]]*PermitRootLogin.*/PermitRootLogin yes/" "$SSHD_CONFIG"
-    sed -i -E "s/^[[:space:]]*#?[[:space:]]*PasswordAuthentication.*/PasswordAuthentication yes/" "$SSHD_CONFIG"
+    # 内部函数：用于健壮地更新或添加配置项
+    update_or_add_config() {
+        local key="$1"
+        local value="$2"
+        local file="$3"
+        if grep -qE "^[[:space:]]*#?[[:space:]]*${key}" "${file}"; then
+            sed -i -E "s/^[[:space:]]*#?[[:space:]]*${key}.*/${key} ${value}/" "${file}"
+        else
+            echo "${key} ${value}" >> "${file}"
+        fi
+    }
+
+    info "确保允许 Root 登录和密码认证..."
+    update_or_add_config "PermitRootLogin" "yes" "$SSHD_CONFIG"
+    update_or_add_config "PasswordAuthentication" "yes" "$SSHD_CONFIG"
     
-    # 检查Port配置是否存在，不存在则追加，存在则修改
-    if grep -qE "^[[:space:]]*#?[[:space:]]*Port" "$SSHD_CONFIG"; then
-        sed -i -E "s/^[[:space:]]*#?[[:space:]]*Port.*/Port $port/" "$SSHD_CONFIG"
-    else
-        echo "Port $port" >> "$SSHD_CONFIG"
-    fi
+    info "设置 SSH 端口..."
+    update_or_add_config "Port" "$port" "$SSHD_CONFIG"
 }
 
-# 测试SSH配置文件的语法 (已修复)
+# 测试SSH配置文件的语法
 test_config() {
     info "正在测试SSH配置文件语法..."
-    # 只返回命令的退出状态码，不直接报错退出
     sshd -t
     return $?
 }
 
-# 配置防火墙
+# 配置SELinux，允许新端口 (新增)
+configure_selinux() {
+    # 检查semanage是否存在且SELinux是否在运行
+    if command -v semanage &>/dev/null && command -v getenforce &>/dev/null && [[ "$(getenforce)" != "Disabled" ]]; then
+        info "检测到 SELinux 正在运行。"
+        # 检查新端口是否已在ssh_port_t上下文中
+        if ! semanage port -l | grep ssh_port_t | grep -q "\btcp\b\s*$port\b"; then
+            info "正在为新端口 $port 配置 SELinux 上下文..."
+            semanage port -a -t ssh_port_t -p tcp "$port"
+            if [ $? -eq 0 ]; then
+                info "SELinux 端口上下文已成功添加。"
+            else
+                warn "配置 SELinux 端口上下文失败。如果 SSH 无法启动，这可能是原因。"
+                warn "您可以尝试手动运行: semanage port -a -t ssh_port_t -p tcp $port"
+            fi
+        else
+            info "SELinux 端口 $port 上下文已存在，无需操作。"
+        fi
+    fi
+}
+
+
+# 配置防火墙 (增强)
 configure_firewall() {
     if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
         info "检测到 firewalld 正在运行。"
         read -p "是否要为端口 $port 添加入站规则? (y/n): " choice
-        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
             firewall-cmd --permanent --add-port=${port}/tcp
             firewall-cmd --reload
             info "firewalld 已为端口 $port 开放。"
@@ -169,9 +196,17 @@ configure_firewall() {
     elif command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
         info "检测到 ufw 正在运行。"
         read -p "是否要为端口 $port 添加入站规则? (y/n): " choice
-        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
             ufw allow ${port}/tcp
             info "ufw 已为端口 $port 开放。"
+        fi
+    elif command -v iptables &>/dev/null; then
+        info "检测到 iptables。"
+        read -p "是否要为端口 $port 添加入站规则? (y/n): " choice
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            iptables -I INPUT 1 -p tcp --dport ${port} -j ACCEPT
+            info "iptables 规则已临时插入。"
+            warn "请注意：iptables 规则在重启后可能会失效，您需要手动配置持久化（例如使用 iptables-persistent）。"
         fi
     fi
 }
@@ -180,7 +215,6 @@ configure_firewall() {
 restart_ssh_service() {
     local service_name="sshd"
     if command -v systemctl &>/dev/null; then
-        # 兼容Debian/Ubuntu(ssh.service)和CentOS/RHEL(sshd.service)
         if systemctl list-unit-files | grep -q '^ssh.service'; then
             service_name="ssh"
         fi
@@ -203,21 +237,22 @@ main() {
     install_sshd
     get_user_input
     
-    # 在修改前将原始配置读入变量，用于可能的回滚
-    local original_config=$(cat "$SSHD_CONFIG")
+    local original_config
+    original_config=$(cat "$SSHD_CONFIG")
     backup_config
     apply_config_changes
     
-    # 测试新配置，如果失败则回滚 (已修复)
     if ! test_config; then
         warn "SSH配置文件语法错误！操作已中止，正在恢复原始配置文件..."
-        # 使用printf恢复配置，比echo更安全
         printf "%s" "$original_config" > "$SSHD_CONFIG"
         error "已恢复原始配置，系统未做任何更改。"
     fi
     info "配置文件语法正确。"
     
+    # 在重启服务前，处理SELinux和防火墙
+    configure_selinux
     configure_firewall
+    
     restart_ssh_service
     
     echo -e "\n======================= ${GREEN}配置完成${NC} ======================="
