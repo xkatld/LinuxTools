@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # ====================================================================
-# Script Name:    虚拟内存管理脚本 (Virtual Memory Manager) v1.0
+# Script Name:    虚拟内存管理脚本 (Virtual Memory Manager) v1.1
 # Author:         xkatld & gemini
 # Description:    一个集成了 ZRAM 和 传统 Swap 文件管理功能的专业工具，
 #                 旨在安全、便捷地优化系统虚拟内存。
@@ -48,7 +48,7 @@ initial_checks() {
     fi
 
     # 3. 核心依赖检查
-    local dependencies=("free" "grep" "sed" "awk")
+    local dependencies=("free" "grep" "sed" "awk" "systemctl")
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             msg "RED" "错误: 缺少核心命令 '$cmd'，请先安装它。"
@@ -77,7 +77,7 @@ show_status() {
 # 功能: 配置并启用 ZRAM
 configure_zram() {
     msg "BLUE" "--- [ZRAM] 安装并配置 ZRAM ---"
-    if ! command -v apt &> /dev/null; then
+    if ! command -v apt-get &> /dev/null; then
         msg "RED" "错误: ZRAM 的自动安装目前仅支持基于 apt 的系统 (Debian/Ubuntu)。"
         return 1
     fi
@@ -97,47 +97,78 @@ configure_zram() {
     done
 
     msg "YELLOW" "正在配置 ZRAM 服务..."
-    # 配置 zram-tools，使用 zstd 压缩算法以获得更好的性能
-    local zram_config="ALGO=zstd\nSIZE=${zram_size}"
-    echo -e "$zram_config" > /etc/default/zram-config
+    # 不同发行版的zram-tools包，其服务和配置文件名可能不同
+    # 此处选择兼容性较好的 zram-config 方式
+    local zram_config_file="/etc/default/zram-config"
+    local zram_service_name="zram-config.service"
+    
+    # 写入配置
+    echo -e "ALGO=zstd\nSIZE=${zram_size}" > "$zram_config_file"
 
     # 重启服务以应用配置
-    systemctl restart zram-config.service
+    msg "YELLOW" "正在重启 ZRAM 服务 ($zram_service_name)..."
+    systemctl restart "$zram_service_name"
 
     echo ""
     msg "GREEN" "✓ ZRAM 已成功配置并启用！"
 }
 
-# 功能: 移除 ZRAM
+# 功能: 移除 ZRAM (已优化)
 remove_zram() {
     msg "BLUE" "--- [ZRAM] 移除 ZRAM ---"
-    if ! command -v zram-config &> /dev/null && [ ! -f /etc/default/zram-config ]; then
-        msg "RED" "错误: 未检测到 zram-tools 或其配置文件，无需移除。"
+    
+    # 定义一个包含所有可能的 ZRAM 服务名称的数组
+    local possible_services=("zram-config.service" "zramswap.service")
+    local active_service=""
+
+    # 智能检测哪个服务当前是活动的
+    for service in "${possible_services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            active_service="$service"
+            msg "GREEN" "检测到活动的 ZRAM 服务: $active_service"
+            break
+        fi
+    done
+
+    # 检查 zram-tools 包是否存在
+    local zram_tools_installed=false
+    if dpkg -s "zram-tools" &>/dev/null; then
+        zram_tools_installed=true
+    fi
+
+    if [[ -z "$active_service" && "$zram_tools_installed" = false ]]; then
+        msg "RED" "错误: 未检测到活动的 ZRAM 服务或 zram-tools 包，无需移除。"
         return 1
     fi
 
-    msg "RED" "警告：此操作将卸载 zram-tools 并移除所有 ZRAM 配置！"
+    msg "RED" "警告：此操作将停止 ZRAM 服务并卸载 zram-tools 包！"
     read -p "$(msg "YELLOW" "您确定要继续吗? [y/N]: ")" confirm
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
         msg "BLUE" "操作已由用户取消。"
         return
     fi
 
-    msg "YELLOW" "正在停止并禁用 ZRAM 服务..."
-    systemctl stop zram-config.service
-    
-    msg "YELLOW" "正在卸载 zram-tools 并清理配置..."
-    # 使用 purge 会删除软件包及其配置文件
-    apt-get purge -y zram-tools
+    # 如果检测到了活动的服务，则停止它
+    if [[ -n "$active_service" ]]; then
+        msg "YELLOW" "正在停止并禁用服务: $active_service..."
+        systemctl stop "$active_service"
+        systemctl disable "$active_service"
+    else
+        msg "YELLOW" "未找到活动的 ZRAM 服务，跳过停止服务步骤。"
+    fi
+
+    # 如果 zram-tools 包已安装，则卸载它
+    if [[ "$zram_tools_installed" = true ]]; then
+        msg "YELLOW" "正在卸载 zram-tools 并清理配置..."
+        apt-get purge -y zram-tools
+    fi
     
     echo ""
     msg "GREEN" "✓ ZRAM 已成功移除！"
 }
 
 
-# --- Swap 文件管理功能 ---
-
-# 功能: 创建并启用 Swap 文件
+# --- Swap 文件管理功能 (无变动) ---
 create_swap_file() {
     msg "BLUE" "--- [Swap文件] 添加 Swap 文件 ---"
     if grep -q "${SWAP_FILE_PATH}" /etc/fstab; then
@@ -168,7 +199,6 @@ create_swap_file() {
     msg "GREEN" "✓ Swap 文件已成功创建并启用！"
 }
 
-# 功能: 禁用并移除 Swap 文件
 remove_swap_file() {
     msg "BLUE" "--- [Swap文件] 移除 Swap 文件 ---"
     if ! grep -q "${SWAP_FILE_PATH}" /etc/fstab && [ ! -f "${SWAP_FILE_PATH}" ]; then
@@ -195,12 +225,12 @@ remove_swap_file() {
 }
 
 
-# --- 主菜单 ---
+# --- 主菜单 (无变动) ---
 main_menu() {
     while true; do
         clear
         msg "BLUE" "##################################################"
-        msg "BLUE" "#         虚拟内存管理脚本 (v1.0)          #"
+        msg "BLUE" "#         虚拟内存管理脚本 (v1.1)          #"
         msg "BLUE" "##################################################"
         show_status
         echo "请选择操作:"
