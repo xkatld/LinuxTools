@@ -10,6 +10,7 @@ readonly COLOR_GREEN='\033[0;32m'
 readonly COLOR_YELLOW='\033[1;33m'
 readonly COLOR_RED='\033[0;31m'
 readonly COLOR_BLUE='\033[0;34m'
+readonly COLOR_CYAN='\033[0;36m'
 readonly COLOR_NC='\033[0m'
 
 msg() {
@@ -28,7 +29,7 @@ check_root() {
 
 check_dependencies() {
     msg "BLUE" "正在检查核心依赖..."
-    local dependencies=("lxc" "jq" "wc")
+    local dependencies=("lxc" "jq" "wc" "lsblk" "curl")
     local missing_deps=()
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -249,29 +250,209 @@ restore_images() {
     msg "GREEN" "==============================================="
 }
 
+install_zfs_on_arm() {
+    local zfs_build_script_url="https://raw.githubusercontent.com/xkatld/debian12-arm64-zfs/refs/heads/main/build_zfs_on_debian.sh"
+    msg "YELLOW" "检测到 ARM 架构。将使用特定脚本编译安装 ZFS。"
+    msg "YELLOW" "这可能需要较长时间，请耐心等待。"
+    read -p "$(msg "YELLOW" "确认从 ${zfs_build_script_url} 下载并执行脚本吗? [y/N]: ")" confirm
+    if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
+        msg "BLUE" "操作已由用户取消。"
+        return 1
+    fi
+    
+    local temp_script
+    temp_script=$(mktemp)
+    trap "rm -f '$temp_script'" EXIT HUP INT QUIT TERM
+
+    msg "BLUE" "正在下载 ZFS 构建脚本..."
+    if ! curl -fsSL "$zfs_build_script_url" -o "$temp_script"; then
+        msg "RED" "下载脚本失败。"
+        return 1
+    fi
+    
+    chmod +x "$temp_script"
+    msg "BLUE" "开始执行 ZFS 构建脚本..."
+    if ! bash "$temp_script"; then
+        msg "RED" "ZFS 构建和安装失败。请检查脚本输出。"
+        return 1
+    fi
+
+    msg "GREEN" "✓ ZFS 编译安装完成。"
+    rm -f "$temp_script"
+    trap - EXIT HUP INT QUIT TERM
+    return 0
+}
+
+install_zfs_standard() {
+    msg "YELLOW" "即将通过 APT 安装 zfsutils-linux..."
+    read -p "$(msg "YELLOW" "确认安装吗? [y/N]: ")" confirm
+    if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
+        msg "BLUE" "操作已由用户取消。"
+        return 1
+    fi
+
+    if ! sudo apt-get install -y zfsutils-linux; then
+        msg "RED" "通过 APT 安装 zfsutils-linux 失败。"
+        return 1
+    fi
+    
+    msg "GREEN" "✓ zfsutils-linux 安装成功。"
+    return 0
+}
+
+install_zfs() {
+    msg "BLUE" "--- 检查并安装 ZFS ---"
+    if command -v zfs &>/dev/null; then
+        msg "GREEN" "ZFS 已安装。"
+        zfs version
+        return 0
+    fi
+
+    msg "YELLOW" "未检测到 ZFS。正在准备安装..."
+    
+    local arch
+    arch=$(dpkg --print-architecture)
+    
+    if [[ "$arch" == "arm64" ]]; then
+        install_zfs_on_arm
+    else
+        install_zfs_standard
+    fi
+
+    if ! command -v zfs &>/dev/null; then
+        msg "RED" "ZFS 安装后仍未找到 'zfs' 命令。安装失败。"
+        return 1
+    fi
+    return 0
+}
+
+create_lxd_zfs_pool() {
+    msg "BLUE" "--- 为 LXD 创建 ZFS 存储池 ---"
+    if ! command -v zfs &>/dev/null; then
+        msg "RED" "错误: ZFS 未安装。请先从菜单中选择安装 ZFS。"
+        return 1
+    fi
+
+    msg "YELLOW" "以下是系统中可用的块设备 (磁盘):"
+    lsblk -d -o NAME,SIZE,TYPE | grep 'disk'
+    echo ""
+
+    read -p "请输入要用于创建 ZFS 池的设备名称 (例如: sdb, vdb): /dev/" device_name
+    local device_path="/dev/${device_name}"
+
+    if [[ -z "$device_name" ]] || [[ ! -b "$device_path" ]]; then
+        msg "RED" "错误: 设备 '$device_path' 无效或不存在。"
+        return 1
+    fi
+    
+    read -p "请输入新的 LXD 存储池名称 (例如: lxd-zfs-pool): " pool_name
+    if [[ -z "$pool_name" ]]; then
+        msg "RED" "错误: 存储池名称不能为空。"
+        return 1
+    fi
+
+    msg "RED" "警告: 此操作将完全擦除设备 '$device_path' 上的所有数据！"
+    read -p "$(msg "YELLOW" "您确定要继续吗? [y/N]: ")" confirm
+    if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
+        msg "BLUE" "操作已由用户取消。"
+        return
+    fi
+    
+    msg "BLUE" "步骤 1/3: 创建 ZFS 池 '$pool_name' on '$device_path'..."
+    if ! zpool create -f "$pool_name" "$device_path"; then
+        msg "RED" "创建 ZFS 池失败。请检查错误信息。"
+        zpool status
+        return 1
+    fi
+    msg "GREEN" "✓ ZFS 池创建成功。"
+    zpool status "$pool_name"
+    
+    msg "BLUE" "\n步骤 2/3: 在 LXD 中创建存储池..."
+    if ! lxc storage create "$pool_name" zfs source="$pool_name"; then
+        msg "RED" "在 LXD 中创建存储池失败。"
+        msg "YELLOW" "您可能需要手动清理: zpool destroy $pool_name"
+        return 1
+    fi
+    msg "GREEN" "✓ LXD 存储池创建成功。"
+    lxc storage list
+    
+    msg "BLUE" "\n步骤 3/3: 将新存储池设置为默认配置..."
+    read -p "$(msg "YELLOW" "是否要将 '$pool_name' 设置为默认 profile 的根磁盘池? (这会替换现有设置) [y/N]: ")" set_default
+    if [[ "${set_default}" =~ ^[yY]$ ]]; then
+        msg "YELLOW" "正在修改默认 profile..."
+        if lxc profile device remove default root && lxc profile device add default root disk path=/ pool="$pool_name"; then
+            msg "GREEN" "✓ 默认 profile 已更新。"
+            lxc profile show default
+        else
+            msg "RED" "修改默认 profile 失败。"
+        fi
+    else
+        msg "BLUE" "已跳过修改默认 profile。"
+    fi
+    
+    msg "GREEN" "==============================================="
+    msg "GREEN" "✓ ZFS 存储池配置完成！"
+    msg "GREEN" "==============================================="
+}
+
+manage_zfs_storage() {
+    while true; do
+        clear
+        msg "BLUE" "#############################################"
+        msg "BLUE" "#            LXD ZFS 存储管理             #"
+        msg "BLUE" "#############################################"
+        echo "当前 ZFS 状态:"
+        if command -v zfs &>/dev/null; then
+            msg "GREEN" "  -> 已安装"
+        else
+            msg "RED" "  -> 未安装"
+        fi
+        lxc storage list
+        echo "---------------------------------------------"
+        echo "请选择要执行的操作:"
+        echo "  1) 检查并安装 ZFS"
+        echo "  2) 创建新的 LXD ZFS 存储池"
+        echo -e "  3) ${COLOR_RED}返回主菜单${COLOR_NC}"
+        read -p "请输入选项 [1-3]: " zfs_choice
+
+        case $zfs_choice in
+            1) install_zfs ;;
+            2) create_lxd_zfs_pool ;;
+            3) return ;;
+            *)
+                msg "RED" "无效的选项 '$zfs_choice'，请重新输入。"
+                ;;
+        esac
+        echo ""
+        read -n 1 -s -r -p "按任意键继续..."
+    done
+}
+
 main_menu() {
     while true; do
         clear
         msg "BLUE" "#############################################"
-        msg "BLUE" "#            LXD 镜像管理助手             #"
+        msg "BLUE" "#            LXD 助手 (v2.0)              #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
         echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境${COLOR_NC}"
         echo -e "  2) ${COLOR_GREEN}备份所有 LXD 镜像${COLOR_NC}"
         echo -e "  3) ${COLOR_YELLOW}从备份恢复 LXD 镜像${COLOR_NC}"
-        echo -e "  4) 列出本地 LXD 镜像"
-        echo -e "  5) ${COLOR_RED}退出脚本${COLOR_NC}"
-        read -p "请输入选项 [1-5]: " main_choice
+        echo -e "  4) ${COLOR_CYAN}管理ZFS储存池${COLOR_NC}"
+        echo "  5) 列出本地 LXD 镜像"
+        echo -e "  6) ${COLOR_RED}退出脚本${COLOR_NC}"
+        read -p "请输入选项 [1-6]: " main_choice
 
         case $main_choice in
             1) install_lxd ;;
             2) backup_images ;;
             3) restore_images ;;
-            4)
+            4) manage_zfs_storage ;;
+            5)
                 msg "BLUE" "--- 当前本地LXD镜像列表 ---"
                 lxc image list
                 ;;
-            5)
+            6)
                 msg "BLUE" "脚本已退出。"
                 exit 0
                 ;;
