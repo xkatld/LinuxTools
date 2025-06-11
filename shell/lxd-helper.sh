@@ -29,7 +29,7 @@ check_root() {
 
 check_dependencies() {
     msg "BLUE" "正在检查核心依赖..."
-    local dependencies=("lxc" "jq" "wc" "lsblk" "curl")
+    local dependencies=("lxc" "jq" "wc" "lsblk" "curl" "truncate")
     local missing_deps=()
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -45,6 +45,23 @@ check_dependencies() {
         exit 1
     fi
     msg "GREEN" "核心依赖检查通过。"
+}
+
+set_lxd_pool_as_default() {
+    local pool_name="$1"
+    msg "BLUE" "\n将新存储池设置为默认配置..."
+    read -p "$(msg "YELLOW" "是否要将 '$pool_name' 设置为默认 profile 的根磁盘池? (这会替换现有设置) [y/N]: ")" set_default
+    if [[ "${set_default}" =~ ^[yY]$ ]]; then
+        msg "YELLOW" "正在修改默认 profile..."
+        if lxc profile device remove default root && lxc profile device add default root disk path=/ pool="$pool_name"; then
+            msg "GREEN" "✓ 默认 profile 已更新。"
+            lxc profile show default
+        else
+            msg "RED" "修改默认 profile 失败。"
+        fi
+    else
+        msg "BLUE" "已跳过修改默认 profile。"
+    fi
 }
 
 is_lxd_installed() {
@@ -326,13 +343,75 @@ install_zfs() {
     return 0
 }
 
-create_lxd_zfs_pool() {
-    msg "BLUE" "--- 为 LXD 创建 ZFS 存储池 ---"
-    if ! command -v zfs &>/dev/null; then
-        msg "RED" "错误: ZFS 未安装。请先从菜单中选择安装 ZFS。"
+create_zfs_pool_from_file() {
+    msg "BLUE" "--- 从镜像文件创建ZFS存储池 ---"
+    local default_path="/var/lib/lxd/disks"
+    read -p "请输入新的 LXD 存储池名称 (例如: lxd-zfs-pool): " pool_name
+    if [[ -z "$pool_name" ]]; then
+        msg "RED" "错误: 存储池名称不能为空。"
         return 1
     fi
 
+    read -p "请输入镜像文件大小 (GB): " file_size
+    if ! [[ "$file_size" =~ ^[1-9][0-9]*$ ]]; then
+        msg "RED" "错误: 大小必须是一个正整数。"
+        return 1
+    fi
+
+    local image_file_path="${default_path}/${pool_name}.img"
+    msg "YELLOW" "将在 '${image_file_path}' 创建一个 ${file_size}GB 的镜像文件。"
+    read -p "$(msg "YELLOW" "您确定要继续吗? [y/N]: ")" confirm
+    if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
+        msg "BLUE" "操作已由用户取消。"
+        return
+    fi
+
+    if zpool list -H -o name | grep -q "^${pool_name}$"; then
+        msg "RED" "错误: 名为 '${pool_name}' 的ZFS池已存在。"
+        return 1
+    fi
+
+    if [[ -f "$image_file_path" ]]; then
+        msg "RED" "错误: 镜像文件 '${image_file_path}' 已存在。"
+        return 1
+    fi
+
+    msg "BLUE" "步骤 1/4: 创建目录 '${default_path}'..."
+    mkdir -p "$default_path"
+
+    msg "BLUE" "步骤 2/4: 创建 ${file_size}GB 的稀疏镜像文件..."
+    if ! truncate -s "${file_size}G" "$image_file_path"; then
+        msg "RED" "创建镜像文件失败。"
+        return 1
+    fi
+    msg "GREEN" "✓ 镜像文件创建成功。"
+
+    msg "BLUE" "步骤 3/4: 在镜像文件上创建 ZFS 池 '$pool_name'..."
+    if ! zpool create -f "$pool_name" "$image_file_path"; then
+        msg "RED" "创建 ZFS 池失败。请检查错误信息。"
+        return 1
+    fi
+    msg "GREEN" "✓ ZFS 池创建成功。"
+    zpool status "$pool_name"
+
+    msg "BLUE" "\n步骤 4/4: 在 LXD 中创建存储池..."
+    if ! lxc storage create "$pool_name" zfs source="$pool_name"; then
+        msg "RED" "在 LXD 中创建存储池失败。"
+        msg "YELLOW" "您可能需要手动清理: zpool destroy $pool_name; rm ${image_file_path}"
+        return 1
+    fi
+    msg "GREEN" "✓ LXD 存储池创建成功。"
+    lxc storage list
+
+    set_lxd_pool_as_default "$pool_name"
+    
+    msg "GREEN" "==============================================="
+    msg "GREEN" "✓ ZFS 存储池配置完成！"
+    msg "GREEN" "==============================================="
+}
+
+create_zfs_pool_from_device() {
+    msg "BLUE" "--- 从块设备创建ZFS存储池 (高级) ---"
     msg "YELLOW" "以下是系统中可用的块设备 (磁盘):"
     lsblk -d -o NAME,SIZE,TYPE | grep 'disk'
     echo ""
@@ -358,7 +437,7 @@ create_lxd_zfs_pool() {
         return
     fi
     
-    msg "BLUE" "步骤 1/3: 创建 ZFS 池 '$pool_name' on '$device_path'..."
+    msg "BLUE" "步骤 1/2: 创建 ZFS 池 '$pool_name' on '$device_path'..."
     if ! zpool create -f "$pool_name" "$device_path"; then
         msg "RED" "创建 ZFS 池失败。请检查错误信息。"
         zpool status
@@ -367,7 +446,7 @@ create_lxd_zfs_pool() {
     msg "GREEN" "✓ ZFS 池创建成功。"
     zpool status "$pool_name"
     
-    msg "BLUE" "\n步骤 2/3: 在 LXD 中创建存储池..."
+    msg "BLUE" "\n步骤 2/2: 在 LXD 中创建存储池..."
     if ! lxc storage create "$pool_name" zfs source="$pool_name"; then
         msg "RED" "在 LXD 中创建存储池失败。"
         msg "YELLOW" "您可能需要手动清理: zpool destroy $pool_name"
@@ -375,24 +454,27 @@ create_lxd_zfs_pool() {
     fi
     msg "GREEN" "✓ LXD 存储池创建成功。"
     lxc storage list
-    
-    msg "BLUE" "\n步骤 3/3: 将新存储池设置为默认配置..."
-    read -p "$(msg "YELLOW" "是否要将 '$pool_name' 设置为默认 profile 的根磁盘池? (这会替换现有设置) [y/N]: ")" set_default
-    if [[ "${set_default}" =~ ^[yY]$ ]]; then
-        msg "YELLOW" "正在修改默认 profile..."
-        if lxc profile device remove default root && lxc profile device add default root disk path=/ pool="$pool_name"; then
-            msg "GREEN" "✓ 默认 profile 已更新。"
-            lxc profile show default
-        else
-            msg "RED" "修改默认 profile 失败。"
-        fi
-    else
-        msg "BLUE" "已跳过修改默认 profile。"
-    fi
+
+    set_lxd_pool_as_default "$pool_name"
     
     msg "GREEN" "==============================================="
     msg "GREEN" "✓ ZFS 存储池配置完成！"
     msg "GREEN" "==============================================="
+}
+
+show_zfs_creation_menu() {
+    clear
+    msg "CYAN" "请选择创建ZFS存储池的方式:"
+    echo "  1) 从镜像文件创建 (推荐, 可限制大小)"
+    echo "  2) 从专用块设备创建 (将格式化整个磁盘)"
+    echo "  3) 返回"
+    read -p "请输入选项 [1-3]: " creation_choice
+    case "$creation_choice" in
+        1) create_zfs_pool_from_file ;;
+        2) create_zfs_pool_from_device ;;
+        3) return ;;
+        *) msg "RED" "无效选项" ;;
+    esac
 }
 
 manage_zfs_storage() {
@@ -417,7 +499,13 @@ manage_zfs_storage() {
 
         case $zfs_choice in
             1) install_zfs ;;
-            2) create_lxd_zfs_pool ;;
+            2) 
+                if ! command -v zfs &>/dev/null; then
+                    msg "RED" "错误: ZFS 未安装。请先从菜单中选择安装 ZFS。"
+                else
+                    show_zfs_creation_menu
+                fi
+                ;;
             3) return ;;
             *)
                 msg "RED" "无效的选项 '$zfs_choice'，请重新输入。"
@@ -432,7 +520,7 @@ main_menu() {
     while true; do
         clear
         msg "BLUE" "#############################################"
-        msg "BLUE" "#            LXD 助手 (v2.0)              #"
+        msg "BLUE" "#            LXD 助手 (v2.1)              #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
         echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境${COLOR_NC}"
