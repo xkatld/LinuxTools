@@ -29,7 +29,7 @@ check_root() {
 
 check_dependencies() {
     msg "BLUE" "正在检查核心依赖..."
-    local dependencies=("lxc" "jq" "wc" "lsblk" "curl" "truncate")
+    local dependencies=("lxd" "jq" "wc" "lsblk" "curl" "truncate")
     local missing_deps=()
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
