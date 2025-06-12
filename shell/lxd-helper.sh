@@ -293,7 +293,6 @@ install_btrfs() {
 
 create_btrfs_pool_from_file() {
     msg "BLUE" "--- 从镜像文件创建BTRFS存储池 ---"
-    local default_path="/var/lib/lxd/disks"
     read -p "请输入新的 LXD 存储池名称 (例如: lxd-btrfs-pool): " pool_name
     if [[ -z "$pool_name" ]]; then
         msg "RED" "错误: 存储池名称不能为空。"
@@ -311,35 +310,19 @@ create_btrfs_pool_from_file() {
         return 1
     fi
 
-    local image_file_path="${default_path}/${pool_name}.img"
-    msg "YELLOW" "将在 '${image_file_path}' 创建一个 ${file_size}GB 的镜像文件。"
+    msg "YELLOW" "将通过 LXD 创建一个名为 '${pool_name}'，大小为 ${file_size}GB 的 BTRFS 存储池。"
     read -p "$(msg "YELLOW" "您确定要继续吗? [y/N]: ")" confirm
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
         msg "BLUE" "操作已由用户取消。"
         return
     fi
 
-    if [[ -f "$image_file_path" ]]; then
-        msg "RED" "错误: 镜像文件 '${image_file_path}' 已存在。"
+    msg "BLUE" "正在通过 LXD 创建 BTRFS 存储池..."
+    if ! lxc storage create "$pool_name" btrfs size="${file_size}GB"; then
+        msg "RED" "在 LXD 中创建存储池失败。请检查错误信息。"
         return 1
     fi
 
-    msg "BLUE" "步骤 1/3: 创建目录 '${default_path}'..."
-    mkdir -p "$default_path"
-
-    msg "BLUE" "步骤 2/3: 创建 ${file_size}GB 的稀疏镜像文件..."
-    if ! truncate -s "${file_size}G" "$image_file_path"; then
-        msg "RED" "创建镜像文件失败。"
-        return 1
-    fi
-    msg "GREEN" "✓ 镜像文件创建成功。"
-
-    msg "BLUE" "\n步骤 3/3: 在 LXD 中创建 BTRFS 存储池..."
-    if ! lxc storage create "$pool_name" btrfs source="$image_file_path"; then
-        msg "RED" "在 LXD 中创建存储池失败。"
-        msg "YELLOW" "您可能需要手动清理: rm ${image_file_path}"
-        return 1
-    fi
     msg "GREEN" "✓ LXD 存储池创建成功。"
     lxc storage list
 
@@ -397,6 +380,73 @@ create_btrfs_pool_from_device() {
     msg "GREEN" "==============================================="
 }
 
+delete_btrfs_pool() {
+    msg "BLUE" "--- 删除 LXD 存储池 ---"
+    msg "YELLOW" "当前可用的存储池:"
+    lxc storage list
+
+    read -p "请输入要删除的存储池名称: " pool_name
+
+    if [[ -z "$pool_name" ]]; then
+        msg "RED" "错误: 存储池名称不能为空。"
+        return 1
+    fi
+
+    if [[ "$pool_name" == "default" ]]; then
+        msg "RED" "错误: 为了安全，不允许通过此脚本删除 'default' 存储池。"
+        return 1
+    fi
+
+    if ! lxc storage list | grep -q "^\s*|\s*${pool_name}\s*|"; then
+        msg "RED" "错误: 名为 '${pool_name}' 的存储池不存在。"
+        return 1
+    fi
+
+    local used_by_count
+    used_by_count=$(lxc query "/1.0/storage-pools/${pool_name}" | jq '.used_by | length')
+
+    if [[ "$used_by_count" -ne 0 ]]; then
+        msg "RED" "错误: 存储池 '${pool_name}' 正在被 ${used_by_count} 个实例或配置文件使用，无法删除。"
+        msg "YELLOW" "使用者列表如下:"
+        lxc query "/1.0/storage-pools/${pool_name}" | jq -r '.used_by[]' | sed 's|^/1.0/||'
+        return 1
+    fi
+
+    local source_path
+    source_path=$(lxc storage get "$pool_name" source)
+
+    msg "RED" "警告: 此操作将永久删除存储池 '${pool_name}' 及其上的所有数据！"
+    if [[ -n "$source_path" && -f "$source_path" ]]; then
+         msg "RED" "同时将删除后备镜像文件: ${source_path}"
+    fi
+
+    read -p "$(msg "YELLOW" "您确定要继续吗? [y/N]: ")" confirm
+    if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
+        msg "BLUE" "操作已由用户取消。"
+        return
+    fi
+
+    msg "BLUE" "正在删除 LXD 存储池 '${pool_name}'..."
+    if ! lxc storage delete "$pool_name"; then
+        msg "RED" "删除存储池失败。请检查 LXD 日志。"
+        return 1
+    fi
+    msg "GREEN" "✓ 存储池 '${pool_name}' 已成功删除。"
+
+    if [[ -n "$source_path" && -f "$source_path" ]]; then
+        msg "BLUE" "正在清理后备镜像文件 '${source_path}'..."
+        if rm -f "$source_path"; then
+            msg "GREEN" "✓ 镜像文件已成功删除。"
+        else
+            msg "RED" "删除镜像文件 '${source_path}' 失败。您可能需要手动删除它。"
+        fi
+    fi
+
+    msg "GREEN" "==============================================="
+    msg "GREEN" "✓ 删除操作完成！"
+    msg "GREEN" "==============================================="
+}
+
 show_btrfs_creation_menu() {
     clear
     msg "CYAN" "请选择创建BTRFS存储池的方式:"
@@ -418,19 +468,15 @@ manage_btrfs_storage() {
         msg "BLUE" "#############################################"
         msg "BLUE" "#           LXD BTRFS 存储管理            #"
         msg "BLUE" "#############################################"
-        echo "当前 BTRFS 状态:"
-        if command -v btrfs &>/dev/null; then
-            msg "GREEN" "  -> 已安装"
-        else
-            msg "RED" "  -> 未安装"
-        fi
+        echo "当前存储池状态:"
         lxc storage list
         echo "---------------------------------------------"
         echo "请选择要执行的操作:"
         echo "  1) 检查并安装 BTRFS 工具"
         echo "  2) 创建新的 LXD BTRFS 存储池"
-        echo -e "  3) ${COLOR_RED}返回主菜单${COLOR_NC}"
-        read -p "请输入选项 [1-3]: " btrfs_choice
+        echo -e "  3) ${COLOR_YELLOW}删除一个 LXD 存储池${COLOR_NC}"
+        echo -e "  4) ${COLOR_RED}返回主菜单${COLOR_NC}"
+        read -p "请输入选项 [1-4]: " btrfs_choice
 
         case $btrfs_choice in
             1) install_btrfs ;;
@@ -441,7 +487,8 @@ manage_btrfs_storage() {
                     show_btrfs_creation_menu
                 fi
                 ;;
-            3) return ;;
+            3) delete_btrfs_pool ;;
+            4) return ;;
             *)
                 msg "RED" "无效的选项 '$btrfs_choice'，请重新输入。"
                 ;;
@@ -455,7 +502,7 @@ main_menu() {
     while true; do
         clear
         msg "BLUE" "#############################################"
-        msg "BLUE" "#            LXD 助手 (v2.1)              #"
+        msg "BLUE" "#            LXD 助手 (v2.2)              #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
         echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境${COLOR_NC}"
