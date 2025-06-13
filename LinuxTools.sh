@@ -13,11 +13,12 @@ set -o pipefail
 
 declare -A SCRIPTS
 SCRIPTS=(
-    ["1"]="LXD 安装与镜像管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/lxd-helper.sh"
+    ["1"]="LXD安装与镜像管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/lxd-helper.sh"
     ["2"]="虚拟内存综合管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/virtual-memory-manager.sh"
     ["3"]="linuxmirrors综合脚本;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/linuxmirrors.sh"
     ["4"]="SSH综合管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/ssh-manager.sh"
     ["5"]="系统优化综合脚本;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/SysOptimize.sh"
+    ["6"]="PVE安装与镜像管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/install-pve.sh"
 )
 
 readonly COLOR_GREEN='\033[0;32m'
