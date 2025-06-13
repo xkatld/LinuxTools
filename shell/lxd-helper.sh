@@ -1,5 +1,5 @@
 #!/bin/bash
-readonly BACKUPS_ROOT_DIR="/root/lxc_backups"
+readonly BACKUPS_ROOT_DIR="/root/lxc_image_backups"
 set -o errexit
 set -o nounset
 set -o pipefail
