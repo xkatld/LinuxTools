@@ -142,7 +142,7 @@ backup_images() {
         msg "BLUE" "操作已由用户取消。"
         return
     fi
-    local backup_dir="${BACKUPS_ROOT_DIR}/backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="${BACKUPS_ROOT_DIR}/lxc_image_backups_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     msg "YELLOW" "所有备份文件将存放在: ${backup_dir}"
     echo ""
@@ -182,9 +182,9 @@ restore_images() {
         return 1
     fi
     local backup_dirs=()
-    mapfile -t backup_dirs < <(find "${BACKUPS_ROOT_DIR}" -mindepth 1 -maxdepth 1 -type d -name "backup_*" -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
+    mapfile -t backup_dirs < <(find "${BACKUPS_ROOT_DIR}" -mindepth 1 -maxdepth 1 -type d -name "lxc_image_backups_*" -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
     if [ ${#backup_dirs[@]} -eq 0 ]; then
-        msg "RED" "错误: 在 '${BACKUPS_ROOT_DIR}' 下未找到任何有效的备份目录 (格式如: backup_*)。"
+        msg "RED" "错误: 在 '${BACKUPS_ROOT_DIR}' 下未找到任何有效的备份目录 (格式如: lxc_image_backups_*)。"
         return 1
     fi
     msg "YELLOW" "发现以下备份目录 (按时间倒序)，请选择一个进行恢复:"
