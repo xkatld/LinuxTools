@@ -353,7 +353,7 @@ main() {
     while true; do
         clear
         echo -e "${COLOR_GREEN}========================================="
-        echo -e "        Linux 系统优化脚本 v1.6 (手动内核管理)       "
+        echo -e "        Linux 系统优化脚本 v1.6      "
         echo -e "=========================================${COLOR_NC}"
         echo "  系统: ${OS_ID} ${OS_VER}"
         echo "  内核: $(uname -r)"
