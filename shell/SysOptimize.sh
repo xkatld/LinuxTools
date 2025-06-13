@@ -158,10 +158,10 @@ update_and_cleanup_kernel() {
         return
     fi
 
-    msg_info "步骤 1/4: 更新软件包列表..."
+    msg_info "步骤 1/5: 更新软件包列表..."
     eval "$UPDATE_CMD"
 
-    msg_info "步骤 2/4: 安装最新的内核包..."
+    msg_info "步骤 2/5: 安装最新的内核包..."
     case "$OS_ID" in
         ubuntu|debian)
             eval "$INSTALL_CMD linux-generic"
@@ -175,7 +175,24 @@ update_and_cleanup_kernel() {
     esac
     msg_ok "内核更新包安装完成。"
 
-    msg_info "步骤 3/4: 自动移除不再需要的旧内核..."
+    msg_info "步骤 3/5: 强制更新 GRUB 引导配置..."
+    if command -v update-grub &>/dev/null; then
+        update-grub
+        msg_ok "GRUB 配置更新完成。"
+    else
+        msg_warn "未找到 'update-grub' 命令，跳过此步骤。 (非Debian/Ubuntu系统属正常现象)"
+    fi
+    
+    if [ -f /etc/default/grub ]; then
+        local grub_default
+        grub_default=$(grep -E "^\s*GRUB_DEFAULT=" /etc/default/grub | tail -n1 | cut -d'=' -f2)
+        if [[ "$grub_default" != "0" && "$grub_default" != "\"0\"" ]]; then
+            msg_warn "检测到 /etc/default/grub 中的 GRUB_DEFAULT 设置为 '$grub_default' 而不是 '0'。"
+            msg_warn "这可能导致系统无法默认启动到最新的内核。建议手动修改为 GRUB_DEFAULT=0"
+        fi
+    fi
+
+    msg_info "步骤 4/5: 自动移除不再需要的旧内核..."
     case "$OS_ID" in
         ubuntu|debian)
             if apt-get autoremove --purge -y; then
@@ -214,7 +231,7 @@ update_and_cleanup_kernel() {
             ;;
     esac
 
-    msg_info "步骤 4/4: 重启系统..."
+    msg_info "步骤 5/5: 重启系统..."
     msg_warn "所有操作已完成。系统需要重启以加载新内核。"
     read -p "是否立即重启? (Y/n): " reboot_confirm
     if [[ ! "$reboot_confirm" =~ ^[nN]$ ]]; then
@@ -331,7 +348,7 @@ main() {
     while true; do
         clear
         echo -e "${COLOR_GREEN}========================================="
-        echo -e "        Linux 系统优化脚本 v1.4        "
+        echo -e "        Linux 系统优化脚本 v1.5        "
         echo -e "=========================================${COLOR_NC}"
         echo "  系统: ${OS_ID} ${OS_VER}"
         echo "  内核: $(uname -r)"
