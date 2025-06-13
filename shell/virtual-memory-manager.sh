@@ -30,7 +30,7 @@ initial_checks() {
         exit 1
     fi
 
-    local dependencies=("free" "grep" "sed" "awk" "systemctl" "dpkg" "apt-get")
+    local dependencies=("free" "grep" "sed" "awk" "systemctl" "dpkg" "apt-get" "modprobe")
     for cmd in "${dependencies[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             msg "RED" "错误: 缺少核心命令 '$cmd'，请先安装它。"
@@ -59,8 +59,25 @@ detect_zram_service() {
     fi
 }
 
+check_zram_module_support() {
+    msg "YELLOW" "正在检查内核是否支持 ZRAM 模块..."
+    if modprobe --dry-run zram &>/dev/null; then
+        msg "GREEN" "✓ 内核支持 ZRAM 模块。"
+        return 0
+    else
+        msg "RED" "错误: 您当前的内核 ($(uname -r)) 似乎不支持 ZRAM 模块。"
+        msg "YELLOW" "这在某些云厂商提供的定制内核中很常见。"
+        msg "YELLOW" "请考虑使用本脚本中的 Swap 文件功能作为替代，或更换为标准的 Linux 内核。"
+        return 1
+    fi
+}
+
 configure_zram() {
     msg "BLUE" "--- [ZRAM] 安装并配置 ZRAM ---"
+    if ! check_zram_module_support; then
+        return 1
+    fi
+
     msg "YELLOW" "正在安装 zram-tools (若未安装)..."
     DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null && apt-get install -y zram-tools
 
@@ -89,10 +106,14 @@ configure_zram() {
     echo -e "ALGO=zstd\nSIZE=${zram_size}" > "$config_file"
 
     msg "YELLOW" "正在重启 ZRAM 服务 ($service_name) 以应用配置..."
-    systemctl restart "$service_name"
-
-    echo ""
-    msg "GREEN" "✓ ZRAM 已成功配置并启用！"
+    if systemctl restart "$service_name"; then
+        echo ""
+        msg "GREEN" "✓ ZRAM 已成功配置并启用！"
+    else
+        echo ""
+        msg "RED" "ZRAM 服务启动失败。请运行 'systemctl status $service_name' 和 'journalctl -xeu $service_name' 查看详细错误。"
+        return 1
+    fi
 }
 
 remove_zram() {
@@ -190,7 +211,7 @@ main_menu() {
     while true; do
         clear
         msg "BLUE" "##################################################"
-        msg "BLUE" "#         虚拟内存管理脚本 (v1.2)          #"
+        msg "BLUE" "#         虚拟内存管理脚本 (v1.3)          #"
         msg "BLUE" "##################################################"
         show_status
         echo "请选择操作:"
