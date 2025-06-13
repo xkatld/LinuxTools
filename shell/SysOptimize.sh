@@ -150,96 +150,101 @@ manage_bbr() {
     done
 }
 
-update_and_cleanup_kernel() {
-    msg_info "开始内核更新和清理流程..."
-    read -p "此操作将更新内核，移除旧版本并要求重启，是否继续? (Y/n): " confirm
-    if [[ "$confirm" =~ ^[nN]$ ]]; then
-        msg_warn "操作已取消。"
+delete_kernel_manually() {
+    msg_info "正在扫描已安装的内核..."
+    
+    local kernel_list_file
+    kernel_list_file=$(mktemp)
+    
+    # 获取所有已安装的内核映像包
+    dpkg-query -W -f='${Package}\n' 'linux-image-*' | grep -v 'generic$' > "$kernel_list_file"
+
+    if ! [ -s "$kernel_list_file" ]; then
+        msg_error "未找到任何已安装的内核映像包。"
+        rm -f "$kernel_list_file"
         return
     fi
 
-    msg_info "步骤 1/5: 更新软件包列表..."
-    eval "$UPDATE_CMD"
+    local current_kernel_pkg="linux-image-$(uname -r)"
+    
+    echo "发现以下已安装的内核:"
+    local i=1
+    local kernels_array=()
+    while read -r pkg; do
+        local display_text="$pkg"
+        if [[ "$pkg" == "$current_kernel_pkg" ]]; then
+            display_text="${COLOR_GREEN}${pkg} (当前正在运行)${COLOR_NC}"
+        fi
+        echo -e "  $i) $display_text"
+        kernels_array+=("$pkg")
+        ((i++))
+    done < "$kernel_list_file"
+    rm -f "$kernel_list_file"
+    
+    echo "----------------------------------------------------------"
+    read -p "请输入要删除的内核编号 (多个请用空格隔开)，或按 Enter 取消: " selection
 
-    msg_info "步骤 2/5: 安装最新的内核包..."
-    case "$OS_ID" in
-        ubuntu|debian)
-            eval "$INSTALL_CMD linux-generic"
-            ;;
-        centos|rhel|almalinux|rocky|fedora)
-            eval "$PKG_MANAGER update -y kernel"
-            ;;
-        arch)
-            pacman -Syu --noconfirm
-            ;;
-    esac
-    msg_ok "内核更新包安装完成。"
+    if [[ -z "$selection" ]]; then
+        msg_info "操作已取消。"
+        return
+    fi
 
-    msg_info "步骤 3/5: 强制更新 GRUB 引导配置..."
-    if command -v update-grub &>/dev/null; then
-        update-grub
-        msg_ok "GRUB 配置更新完成。"
-    else
-        msg_warn "未找到 'update-grub' 命令，跳过此步骤。 (非Debian/Ubuntu系统属正常现象)"
+    local packages_to_delete=()
+    for index in $selection; do
+        if ! [[ "$index" =~ ^[1-9][0-9]*$ && "$index" -le "${#kernels_array[@]}" ]]; then
+            msg_warn "无效的编号: $index, 已跳过。"
+            continue
+        fi
+
+        local selected_pkg="${kernels_array[$((index-1))]}"
+        if [[ "$selected_pkg" == "$current_kernel_pkg" ]]; then
+            msg_error "安全保护：无法删除当前正在运行的内核 ($selected_pkg)，已跳过。"
+            continue
+        fi
+        packages_to_delete+=("$selected_pkg")
+    done
+
+    if [ ${#packages_to_delete[@]} -eq 0 ]; then
+        msg_info "没有选择任何有效的内核进行删除。"
+        return
+    fi
+
+    msg_warn "即将永久删除以下内核包及其关联组件 (headers, modules):"
+    for pkg in "${packages_to_delete[@]}"; do
+        echo "  - $pkg"
+    done
+    read -p "请再次确认是否继续? (y/N): " confirm
+
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        msg_info "操作已由用户取消。"
+        return
     fi
     
-    if [ -f /etc/default/grub ]; then
-        local grub_default
-        grub_default=$(grep -E "^\s*GRUB_DEFAULT=" /etc/default/grub | tail -n1 | cut -d'=' -f2)
-        if [[ "$grub_default" != "0" && "$grub_default" != "\"0\"" ]]; then
-            msg_warn "检测到 /etc/default/grub 中的 GRUB_DEFAULT 设置为 '$grub_default' 而不是 '0'。"
-            msg_warn "这可能导致系统无法默认启动到最新的内核。建议手动修改为 GRUB_DEFAULT=0"
-        fi
-    fi
+    local full_package_list_to_delete=()
+    for pkg in "${packages_to_delete[@]}"; do
+        local version_string
+        version_string=$(echo "$pkg" | sed 's/linux-image-//')
+        full_package_list_to_delete+=( $(dpkg-query -W -f='${Package}\n' "linux-*-${version_string}" 2>/dev/null) )
+    done
+    
+    local unique_packages
+    unique_packages=$(printf "%s\n" "${full_package_list_to_delete[@]}" | sort -u)
 
-    msg_info "步骤 4/5: 自动移除不再需要的旧内核..."
-    case "$OS_ID" in
-        ubuntu|debian)
-            if apt-get autoremove --purge -y; then
-                msg_ok "旧内核清理完成。"
-            else
-                msg_error "自动移除旧内核失败。"
-            fi
-            ;;
-        centos|rhel|almalinux|rocky)
-            if command -v dnf &>/dev/null; then
-                local old_kernels
-                old_kernels=$(dnf repoquery --installonly --latest-limit=-1 -q)
-                if [[ -n "$old_kernels" ]]; then
-                    if dnf remove -y $old_kernels; then
-                        msg_ok "旧内核清理完成。"
-                    else
-                        msg_error "使用 dnf 移除旧内核失败。"
-                    fi
-                else
-                    msg_info "没有找到可移除的旧内核。"
-                fi
-            else
-                if ! command -v package-cleanup &>/dev/null; then
-                    msg_info "正在安装 yum-utils 以使用 package-cleanup..."
-                    yum install -y yum-utils
-                fi
-                if package-cleanup --oldkernels --count=1 -y; then
-                    msg_ok "旧内核清理完成。"
-                else
-                    msg_error "使用 package-cleanup 移除旧内核失败。"
-                fi
-            fi
-            ;;
-        arch)
-            msg_info "Arch Linux 在系统更新时处理内核，自动清理风险较高，建议手动管理。"
-            ;;
-    esac
-
-    msg_info "步骤 5/5: 重启系统..."
-    msg_warn "所有操作已完成。系统需要重启以加载新内核。"
-    read -p "是否立即重启? (Y/n): " reboot_confirm
-    if [[ ! "$reboot_confirm" =~ ^[nN]$ ]]; then
-        msg_info "正在重启系统..."
-        reboot
+    msg_info "正在执行删除命令..."
+    if apt-get purge -y $unique_packages; then
+        msg_ok "选定的内核包已成功删除。"
     else
-        msg_warn "请记得稍后手动重启以应用新内核。"
+        msg_error "删除内核时出错。"
+        return
     fi
+
+    msg_info "正在更新 GRUB 引导配置..."
+    if command -v update-grub &>/dev/null; then
+        update-grub
+        msg_ok "GRUB 更新成功。"
+    fi
+    
+    msg_warn "操作完成。建议重启系统以使更改生效。"
 }
 
 manage_kernel() {
@@ -249,7 +254,7 @@ manage_kernel() {
         echo "当前内核: $(uname -r)"
         echo "----------------------------------------------------------"
         echo "1) 从官方源更新内核 (仅安装)"
-        echo -e "2) ${COLOR_YELLOW}更新内核并清理旧版本 (推荐并重启)${COLOR_NC}"
+        echo -e "2) ${COLOR_YELLOW}手动清理已安装的内核 (推荐)${COLOR_NC}"
         echo "0) 返回主菜单"
 
         read -p "请输入选项: " choice
@@ -287,8 +292,8 @@ manage_kernel() {
                 press_any_key
                 ;;
             2)
-                update_and_cleanup_kernel
-                break 
+                delete_kernel_manually
+                press_any_key
                 ;;
             0)
                 break
@@ -348,7 +353,7 @@ main() {
     while true; do
         clear
         echo -e "${COLOR_GREEN}========================================="
-        echo -e "        Linux 系统优化脚本 v1.5        "
+        echo -e "        Linux 系统优化脚本 v1.6 (手动内核管理)       "
         echo -e "=========================================${COLOR_NC}"
         echo "  系统: ${OS_ID} ${OS_VER}"
         echo "  内核: $(uname -r)"
