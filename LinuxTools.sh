@@ -17,6 +17,7 @@ SCRIPTS=(
     ["2"]="虚拟内存综合管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/virtual-memory-manager.sh"
     ["3"]="linuxmirrors综合脚本;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/linuxmirrors.sh"
     ["4"]="SSH综合管理;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/ssh-manager.sh"
+    ["5"]="系统优化综合脚本;https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell/SysOptimize.sh"
 )
 
 readonly COLOR_GREEN='\033[0;32m'
