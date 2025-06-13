@@ -150,36 +150,70 @@ manage_bbr() {
     done
 }
 
+update_grub_config() {
+    msg_info "正在更新 GRUB 引导配置..."
+    if command -v update-grub &>/dev/null; then
+        update-grub
+        msg_ok "GRUB (update-grub) 更新成功。"
+    elif command -v grub2-mkconfig &>/dev/null; then
+        if [ -f /boot/grub2/grub.cfg ]; then
+            grub2-mkconfig -o /boot/grub2/grub.cfg
+            msg_ok "GRUB (grub2-mkconfig) 更新成功。"
+        elif [ -f /boot/efi/EFI/$(echo "$OS_ID" | tr '[:upper:]' '[:lower:]')/grub.cfg ]; then
+             grub2-mkconfig -o /boot/efi/EFI/$(echo "$OS_ID" | tr '[:upper:]' '[:lower:]')/grub.cfg
+             msg_ok "GRUB (grub2-mkconfig) 更新成功。"
+        else
+            msg_warn "找到了 grub2-mkconfig, 但未找到标准的 grub.cfg 路径，请手动更新。"
+        fi
+    else
+        msg_warn "未找到 update-grub 或 grub2-mkconfig, 请在需要时手动更新引导配置。"
+    fi
+}
+
 delete_kernel_manually() {
     msg_info "正在扫描已安装的内核..."
     
-    local kernel_list_file
-    kernel_list_file=$(mktemp)
-    
-    # 获取所有已安装的内核映像包
-    dpkg-query -W -f='${Package}\n' 'linux-image-*' | grep -v 'generic$' > "$kernel_list_file"
+    local kernels_array=()
+    local current_kernel_pkg=""
+    local packages_to_delete=()
 
-    if ! [ -s "$kernel_list_file" ]; then
-        msg_error "未找到任何已安装的内核映像包。"
-        rm -f "$kernel_list_file"
+    case "$OS_ID" in
+        ubuntu|debian)
+            mapfile -t kernels_array < <(dpkg-query -W -f='${Package}\n' 'linux-image-[0-9]*' | grep -v 'generic$')
+            current_kernel_pkg="linux-image-$(uname -r)"
+            ;;
+        centos|rhel|almalinux|rocky|fedora)
+            mapfile -t kernels_array < <(rpm -q kernel)
+            current_kernel_pkg="kernel-$(uname -r)"
+            ;;
+        arch)
+            msg_warn "在 Arch Linux 上, 内核通常通过 pacman 直接管理 (例如: 'sudo pacman -R linux-lts')。"
+            msg_warn "此脚本不提供自动删除功能以避免风险。请手动操作。"
+            return
+            ;;
+        *)
+            msg_error "当前操作系统 ($OS_ID) 不支持手动内核删除功能。"
+            return
+            ;;
+    esac
+
+    if [ ${#kernels_array[@]} -eq 0 ]; then
+        msg_error "未找到任何可管理的内核包。"
         return
     fi
 
-    local current_kernel_pkg="linux-image-$(uname -r)"
-    
     echo "发现以下已安装的内核:"
     local i=1
-    local kernels_array=()
-    while read -r pkg; do
+    local display_kernels=()
+    for pkg in "${kernels_array[@]}"; do
         local display_text="$pkg"
         if [[ "$pkg" == "$current_kernel_pkg" ]]; then
             display_text="${COLOR_GREEN}${pkg} (当前正在运行)${COLOR_NC}"
         fi
         echo -e "  $i) $display_text"
-        kernels_array+=("$pkg")
+        display_kernels+=("$pkg")
         ((i++))
-    done < "$kernel_list_file"
-    rm -f "$kernel_list_file"
+    done
     
     echo "----------------------------------------------------------"
     read -p "请输入要删除的内核编号 (多个请用空格隔开)，或按 Enter 取消: " selection
@@ -189,7 +223,6 @@ delete_kernel_manually() {
         return
     fi
 
-    local packages_to_delete=()
     for index in $selection; do
         if ! [[ "$index" =~ ^[1-9][0-9]*$ && "$index" -le "${#kernels_array[@]}" ]]; then
             msg_warn "无效的编号: $index, 已跳过。"
@@ -209,7 +242,7 @@ delete_kernel_manually() {
         return
     fi
 
-    msg_warn "即将永久删除以下内核包及其关联组件 (headers, modules):"
+    msg_warn "即将永久删除以下内核包及其关联组件:"
     for pkg in "${packages_to_delete[@]}"; do
         echo "  - $pkg"
     done
@@ -220,32 +253,35 @@ delete_kernel_manually() {
         return
     fi
     
-    local full_package_list_to_delete=()
-    for pkg in "${packages_to_delete[@]}"; do
-        local version_string
-        version_string=$(echo "$pkg" | sed 's/linux-image-//')
-        full_package_list_to_delete+=( $(dpkg-query -W -f='${Package}\n' "linux-*-${version_string}" 2>/dev/null) )
-    done
-    
-    local unique_packages
-    unique_packages=$(printf "%s\n" "${full_package_list_to_delete[@]}" | sort -u)
+    local full_package_list_to_delete_str
+    case "$OS_ID" in
+        ubuntu|debian)
+            local temp_list=()
+            for pkg in "${packages_to_delete[@]}"; do
+                local version_string
+                version_string=$(echo "$pkg" | sed 's/linux-image-//')
+                temp_list+=( $(dpkg-query -W -f='${Package}\n' "linux-*-${version_string}" 2>/dev/null) )
+            done
+            full_package_list_to_delete_str=$(printf "%s\n" "${temp_list[@]}" | sort -u | tr '\n' ' ')
+            ;;
+        centos|rhel|almalinux|rocky|fedora)
+            full_package_list_to_delete_str=$(printf "%s " "${packages_to_delete[@]}")
+            ;;
+    esac
 
     msg_info "正在执行删除命令..."
-    if apt-get purge -y $unique_packages; then
+    if eval "$PKG_MANAGER remove -y $full_package_list_to_delete_str"; then
         msg_ok "选定的内核包已成功删除。"
     else
         msg_error "删除内核时出错。"
         return
     fi
 
-    msg_info "正在更新 GRUB 引导配置..."
-    if command -v update-grub &>/dev/null; then
-        update-grub
-        msg_ok "GRUB 更新成功。"
-    fi
+    update_grub_config
     
     msg_warn "操作完成。建议重启系统以使更改生效。"
 }
+
 
 manage_kernel() {
     while true; do
@@ -353,7 +389,7 @@ main() {
     while true; do
         clear
         echo -e "${COLOR_GREEN}========================================="
-        echo -e "        Linux 系统优化脚本 v1.6      "
+        echo -e "     Linux 系统优化脚本 v1.7     "
         echo -e "=========================================${COLOR_NC}"
         echo "  系统: ${OS_ID} ${OS_VER}"
         echo "  内核: $(uname -r)"
