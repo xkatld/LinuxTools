@@ -257,7 +257,7 @@ main() {
         echo "  内核: $(uname -r)"
         echo "-----------------------------------------"
         echo "  1) 软件包管理"
-        echo "  2) 内核管理 (统一更新策略)"
+        echo "  2) 内核管理"
         echo "  3) BBR 管理"
         echo -e "  ${COLOR_RED}0) 退出脚本${COLOR_NC}"
         echo -e "${COLOR_GREEN}=========================================${COLOR_NC}"
