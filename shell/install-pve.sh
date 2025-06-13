@@ -257,7 +257,7 @@ function show_completion_info() {
     ip=$(hostname -I | awk '{print $1}')
 
     printf "\n============================================================\n"
-    log_info "🎉 Proxmox VE $PVE_VERSION 安装成功! 🎉"
+    log_info "    Proxmox VE $PVE_VERSION 安装成功!    "
     printf "============================================================\n\n"
     
     log_info "请通过以下地址访问 Proxmox VE Web 管理界面:"
