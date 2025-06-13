@@ -53,7 +53,6 @@ function check_prerequisites() {
     esac
     log_info "检测到系统架构: ${SYSTEM_ARCH}"
 
-    # 修正之处：检查命令并映射到正确的软件包名称
     declare -A deps_map=(
         ["curl"]="curl"
         ["lsb_release"]="lsb-release"
@@ -113,8 +112,10 @@ function configure_architecture_specifics() {
         PVE_REPO_COMPONENT="pve-no-subscription"
         PVE_GPG_KEY_URL="http://download.proxmox.com/proxmox-release-${DEBIAN_CODENAME}.gpg"
     else
+        # 修正之处：为 ARM64 单独处理 URL，确保路径正确
         log_info "为 ARM64 架构选择第三方镜像源。"
         local choice
+        local mirror_domain
         while true; do
             printf "请选择一个地理位置较近的镜像源以获得更快的速度：\n"
             printf "  1) 主源 (韩国)\n"
@@ -124,17 +125,20 @@ function configure_architecture_specifics() {
             read -p "请输入选项数字 (1-4): " choice
             
             case $choice in
-                1) MIRROR_BASE="https://mirrors.apqa.cn/proxmox/debian/pve"; break ;;
-                2) MIRROR_BASE="https://mirrors.lierfang.com/proxmox/debian/pve"; break ;;
-                3) MIRROR_BASE="https://hk.mirrors.apqa.cn/proxmox/debian/pve"; break ;;
-                4) MIRROR_BASE="https://de.mirrors.apqa.cn/proxmox/debian/pve"; break ;;
+                1) mirror_domain="https://mirrors.apqa.cn"; break ;;
+                2) mirror_domain="https://mirrors.lierfang.com"; break ;;
+                3) mirror_domain="https://hk.mirrors.apqa.cn"; break ;;
+                4) mirror_domain="https://de.mirrors.apqa.cn"; break ;;
                 *) log_warn "无效的选项，请输入 1 到 4 之间的数字。" ;;
             esac
         done
+        # 分别、显式地构建软件源和GPG密钥的URL
+        MIRROR_BASE="${mirror_domain}/proxmox/debian/pve"
         PVE_REPO_COMPONENT="port"
-        PVE_GPG_KEY_URL="${MIRROR_BASE%/*/*}/pveport.gpg"
+        PVE_GPG_KEY_URL="${mirror_domain}/proxmox/debian/pveport.gpg"
     fi
     log_info "软件源地址已设置为: ${MIRROR_BASE}"
+    log_info "GPG密钥地址已设置为: ${PVE_GPG_KEY_URL}"
 }
 
 function configure_hostname() {
