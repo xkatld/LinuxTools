@@ -407,10 +407,9 @@ main_menu() {
         clear
         msg "BLUE" "#############################################"
         msg "BLUE" "#           LXD 助手 (v2.4)                 #"
-        msg "BLUE" "#     由 xkatld & gemini (脚本大师) 提供      #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
-        echo -e "  1) ${COLOR_CYAN}安装或检查 LXD 环境 (Snap)${COLOR_RESET}"
+        echo -e "  1) ${COLOR_CYAN}安装或检查 LXD 环境${COLOR_RESET}"
         echo -e "  2) ${COLOR_GREEN}备份所有本地 LXD 镜像${COLOR_RESET}"
         echo -e "  3) ${COLOR_YELLOW}从备份恢复 LXD 镜像${COLOR_RESET}"
         echo -e "  4) ${COLOR_CYAN}管理 BTRFS 存储池${COLOR_RESET}"
