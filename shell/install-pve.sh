@@ -53,17 +53,26 @@ function check_prerequisites() {
     esac
     log_info "检测到系统架构: ${SYSTEM_ARCH}"
 
-    local missing_deps=()
-    local dependencies=("curl" "hostnamectl" "lsb_release")
-    for cmd in "${dependencies[@]}"; do
+    # 修正之处：检查命令并映射到正确的软件包名称
+    declare -A deps_map=(
+        ["curl"]="curl"
+        ["lsb_release"]="lsb-release"
+    )
+    local missing_pkgs=()
+
+    for cmd in "${!deps_map[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
-            missing_deps+=("$cmd")
+            missing_pkgs+=("${deps_map[$cmd]}")
         fi
     done
 
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        log_error "缺少必要的依赖命令: ${missing_deps[*]}"
-        log_info "请尝试运行 'apt update && apt install ${missing_deps[*]}' 来安装它们。"
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        local missing_pkgs_str
+        missing_pkgs_str=$(printf " %s" "${missing_pkgs[@]}")
+        missing_pkgs_str=${missing_pkgs_str:1}
+
+        log_error "缺少必要的软件包: ${missing_pkgs_str}"
+        log_info "请尝试运行 'apt-get update && apt-get install -y ${missing_pkgs_str}' 来安装它们。"
         exit 1
     fi
     log_info "所有依赖项均已满足。"
@@ -123,11 +132,10 @@ function configure_architecture_specifics() {
             esac
         done
         PVE_REPO_COMPONENT="port"
-        PVE_GPG_KEY_URL="${MIRROR_BASE%/*/*}/pveport.gpg" # 从基础URL推导GPG地址
+        PVE_GPG_KEY_URL="${MIRROR_BASE%/*/*}/pveport.gpg"
     fi
     log_info "软件源地址已设置为: ${MIRROR_BASE}"
 }
-
 
 function configure_hostname() {
     log_step "配置主机名和 /etc/hosts 文件"
@@ -212,7 +220,8 @@ function run_installation() {
     log_step "开始安装 Proxmox VE"
     
     log_info "正在下载 Proxmox GPG 密钥..."
-    local gpg_key_name=$(basename "$PVE_GPG_KEY_URL")
+    local gpg_key_name
+    gpg_key_name=$(basename "$PVE_GPG_KEY_URL")
     if ! curl -fsSL "${PVE_GPG_KEY_URL}" -o "/etc/apt/trusted.gpg.d/${gpg_key_name}"; then
         log_error "GPG 密钥下载失败。请检查网络连接或源地址是否可用。"
         exit 1
@@ -223,7 +232,7 @@ function run_installation() {
     log_info "正在配置 Proxmox VE 的 APT 源..."
     echo "deb ${MIRROR_BASE} ${DEBIAN_CODENAME} ${PVE_REPO_COMPONENT}" > /etc/apt/sources.list.d/pve.list
     
-    log_info "正在更新软件包列表 (apt update)..."
+    log_info "正在更新软件包列表 (apt-get update)..."
     if ! apt-get update; then
         log_error "软件包列表更新失败。请检查您的网络和 APT 配置。"
         exit 1
