@@ -153,59 +153,81 @@ manage_bbr() {
     done
 }
 
-# --- 内核管理 ---
-install_ubuntu_mainline_kernel() {
-    msg_info "正在使用 'ubuntu-mainline-kernel.sh' 脚本安装最新主线内核..."
-    local script_path="/usr/local/bin/ubuntu-mainline-kernel.sh"
-    if ! command -v "$script_path" &>/dev/null; then
-        wget -qO "$script_path" https://raw.githubusercontent.com/pimlie/ubuntu-mainline-kernel.sh/master/ubuntu-mainline-kernel.sh
-        chmod +x "$script_path"
-    fi
-    "$script_path" -i
-    msg_ok "内核安装脚本执行完毕。请检查输出并重启系统以使用新内核。"
-}
-
-install_elrepo_kernel() {
-    local repo_url="https://www.elrepo.org/elrepo-release-${OS_VER:0:1}.el${OS_VER:0:1}.elrepo.noarch.rpm"
-    msg_info "正在为 CentOS/RHEL 系列安装 ELRepo..."
-    rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
-    $INSTALL_CMD "$repo_url"
-
-    read -p "要安装最新主线内核(ml)还是长期支持内核(lt)? [ml/lt]: " kernel_type
-    if [[ "$kernel_type" == "ml" ]]; then
-        $INSTALL_CMD --enablerepo=elrepo-kernel kernel-ml
-    elif [[ "$kernel_type" == "lt" ]]; then
-        $INSTALL_CMD --enablerepo=elrepo-kernel kernel-lt
-    else
-        msg_error "无效的选择。"
-        return
-    fi
-    msg_ok "内核安装完成。请重启系统并从GRUB菜单中选择新内核。"
-}
-
+# --- 内核管理 (v1.1 修订版) ---
 manage_kernel() {
-     while true; do
+    while true; do
         clear
-        echo "=== 内核管理菜单 ==="
+        echo "=== 内核管理菜单 (官方源策略) ==="
         echo "当前内核: $(uname -r)"
-        echo "----------------------"
-        if [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" ]]; then
-            echo "1) 安装最新主线内核 (通过 ubuntu-mainline-kernel.sh)"
-        elif [[ "$OS_ID" == "centos" || "$OS_ID" == "rhel" || "$OS_ID" == "almalinux" || "$OS_ID" == "rocky" ]]; then
-            echo "1) 安装 ELRepo 最新内核 (ml/lt)"
-        else
-            msg_warn "当前系统 ($OS_ID) 的内核自动安装暂不支持。"
-        fi
+        msg_info "策略: 提供官方软件源中稳定、受支持的最新内核版本。"
+        echo "-----------------------------------------------------"
+        
+        local kernel_option_available=false
+        case "$OS_ID" in
+            ubuntu)
+                echo "1) 安装/更新 HWE 内核 (官方推荐的、用于支持新硬件的较新内核)"
+                kernel_option_available=true
+                ;;
+            debian)
+                echo "1) 安装/更新 backports 内核 (官方的较新内核)"
+                kernel_option_available=true
+                ;;
+            centos|rhel|almalinux|rocky)
+                echo "1) 更新到当前分支的最新内核版本"
+                kernel_option_available=true
+                ;;
+            arch|fedora)
+                msg_warn "您使用的是滚动发行版，通过常规系统更新即可获取最新内核。"
+                ;;
+            *)
+                msg_error "您的系统 ($OS_ID) 暂无简化的内核更新选项。"
+                ;;
+        esac
         echo "0) 返回主菜单"
-        read -p "请输入选项: " choice
+        
+        if ! $kernel_option_available; then
+            read -p "按0返回: " choice
+            [[ "$choice" == "0" ]] && break
+            continue
+        fi
 
+        read -p "请输入选项: " choice
         case "$choice" in
             1)
-                if [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" ]]; then
-                    install_ubuntu_mainline_kernel
-                elif [[ "$OS_ID" == "centos" || "$OS_ID" == "rhel" || "$OS_ID" == "almalinux" || "$OS_ID" == "rocky" ]]; then
-                    install_elrepo_kernel
-                fi
+                case "$OS_ID" in
+                    ubuntu)
+                        msg_info "即将安装 Ubuntu Hardware Enablement (HWE) 内核..."
+                        read -p "HWE内核由官方提供，用于支持较新的硬件，是否继续? (Y/n): " confirm
+                        if [[ "$confirm" =~ ^[nN]$ ]]; then msg_warn "操作已取消。"; else
+                            $UPDATE_CMD
+                            local hwe_pkg="linux-generic-hwe-$(lsb_release -rs)"
+                            msg_info "正在执行: $INSTALL_CMD $hwe_pkg"
+                            $INSTALL_CMD "$hwe_pkg"
+                            msg_ok "HWE 内核安装/更新完成，请重启系统以生效。"
+                        fi
+                        ;;
+                    debian)
+                        msg_info "即将安装 Debian backports 内核..."
+                        read -p "Backports 内核由官方提供，版本较新，是否继续? (Y/n): " confirm
+                        if [[ "$confirm" =~ ^[nN]$ ]]; then msg_warn "操作已取消。"; else
+                            local CODENAME=$(. /etc/os-release; echo $VERSION_CODENAME)
+                            echo "deb http://deb.debian.org/debian ${CODENAME}-backports main" > /etc/apt/sources.list.d/backports.list
+                            $UPDATE_CMD
+                            msg_info "正在从 backports 安装内核..."
+                            $INSTALL_CMD -t ${CODENAME}-backports linux-image-amd64 linux-headers-amd64
+                            msg_ok "Backports 内核安装/更新完成，请重启系统以生效。"
+                        fi
+                        ;;
+                    centos|rhel|almalinux|rocky)
+                        msg_info "即将从官方源更新内核..."
+                        read -p "此操作会更新到当前系统分支最新的稳定内核，是否继续? (Y/y): " confirm
+                        if [[ "$confirm" =~ ^[nN]$ ]]; then msg_warn "操作已取消。"; else
+                            msg_info "正在执行: $PKG_MANAGER update kernel"
+                            $PKG_MANAGER update -y kernel
+                            msg_ok "内核更新完成，请重启系统以生效。"
+                        fi
+                        ;;
+                esac
                 ;;
             0) break ;;
             *) msg_error "无效选项" ;;
@@ -213,6 +235,7 @@ manage_kernel() {
         press_any_key
     done
 }
+
 
 # --- 软件包管理 ---
 install_packages() {
@@ -264,13 +287,13 @@ main() {
     while true; do
         clear
         echo -e "${COLOR_GREEN}========================================="
-        echo -e "        Linux 系统优化脚本 v1.0        "
+        echo -e "        Linux 系统优化脚本 v1.1        "
         echo -e "=========================================${COLOR_NC}"
         echo "  系统: ${OS_ID} ${OS_VER}"
         echo "  内核: $(uname -r)"
         echo "-----------------------------------------"
         echo "  1) 软件包管理"
-        echo "  2) 内核管理"
+        echo "  2) 内核管理 (官方源策略)"
         echo "  3) BBR 管理"
         echo -e "  ${COLOR_RED}0) 退出脚本${COLOR_NC}"
         echo -e "${COLOR_GREEN}=========================================${COLOR_NC}"
