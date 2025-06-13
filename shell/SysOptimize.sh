@@ -150,14 +150,89 @@ manage_bbr() {
     done
 }
 
+update_and_cleanup_kernel() {
+    msg_info "开始内核更新和清理流程..."
+    read -p "此操作将更新内核，移除旧版本并要求重启，是否继续? (Y/n): " confirm
+    if [[ "$confirm" =~ ^[nN]$ ]]; then
+        msg_warn "操作已取消。"
+        return
+    fi
+
+    msg_info "步骤 1/4: 更新软件包列表..."
+    eval "$UPDATE_CMD"
+
+    msg_info "步骤 2/4: 安装最新的内核包..."
+    case "$OS_ID" in
+        ubuntu|debian)
+            eval "$INSTALL_CMD linux-generic"
+            ;;
+        centos|rhel|almalinux|rocky|fedora)
+            eval "$PKG_MANAGER update -y kernel"
+            ;;
+        arch)
+            pacman -Syu --noconfirm
+            ;;
+    esac
+    msg_ok "内核更新包安装完成。"
+
+    msg_info "步骤 3/4: 自动移除不再需要的旧内核..."
+    case "$OS_ID" in
+        ubuntu|debian)
+            if apt-get autoremove --purge -y; then
+                msg_ok "旧内核清理完成。"
+            else
+                msg_error "自动移除旧内核失败。"
+            fi
+            ;;
+        centos|rhel|almalinux|rocky)
+            if command -v dnf &>/dev/null; then
+                local old_kernels
+                old_kernels=$(dnf repoquery --installonly --latest-limit=-1 -q)
+                if [[ -n "$old_kernels" ]]; then
+                    if dnf remove -y $old_kernels; then
+                        msg_ok "旧内核清理完成。"
+                    else
+                        msg_error "使用 dnf 移除旧内核失败。"
+                    fi
+                else
+                    msg_info "没有找到可移除的旧内核。"
+                fi
+            else
+                if ! command -v package-cleanup &>/dev/null; then
+                    msg_info "正在安装 yum-utils 以使用 package-cleanup..."
+                    yum install -y yum-utils
+                fi
+                if package-cleanup --oldkernels --count=1 -y; then
+                    msg_ok "旧内核清理完成。"
+                else
+                    msg_error "使用 package-cleanup 移除旧内核失败。"
+                fi
+            fi
+            ;;
+        arch)
+            msg_info "Arch Linux 在系统更新时处理内核，自动清理风险较高，建议手动管理。"
+            ;;
+    esac
+
+    msg_info "步骤 4/4: 重启系统..."
+    msg_warn "所有操作已完成。系统需要重启以加载新内核。"
+    read -p "是否立即重启? (Y/n): " reboot_confirm
+    if [[ ! "$reboot_confirm" =~ ^[nN]$ ]]; then
+        msg_info "正在重启系统..."
+        reboot
+    else
+        msg_warn "请记得稍后手动重启以应用新内核。"
+    fi
+}
+
 manage_kernel() {
     while true; do
         clear
-        echo "=== 内核管理菜单 (统一更新策略) ==="
+        echo "=== 内核管理菜单 ==="
         echo "当前内核: $(uname -r)"
-        msg_info "策略: 对所有系统，均执行从官方默认源更新内核的标准操作。"
         echo "----------------------------------------------------------"
-        echo "1) 从官方源更新内核"
+        echo "1) 从官方源更新内核 (仅安装)"
+        echo -e "2) ${COLOR_YELLOW}更新内核并清理旧版本 (推荐并重启)${COLOR_NC}"
         echo "0) 返回主菜单"
 
         read -p "请输入选项: " choice
@@ -169,15 +244,15 @@ manage_kernel() {
                 if [[ "$confirm" =~ ^[nN]$ ]]; then
                     msg_warn "操作已取消。"
                 else
-                    $UPDATE_CMD
+                    eval "$UPDATE_CMD"
                     case "$OS_ID" in
                         ubuntu|debian)
                             msg_info "正在为 Debian/Ubuntu 执行: $INSTALL_CMD linux-generic"
-                            $INSTALL_CMD linux-generic
+                            eval "$INSTALL_CMD linux-generic"
                             ;;
                         centos|rhel|almalinux|rocky|fedora)
                             msg_info "正在为 RHEL/CentOS/Fedora 执行: $PKG_MANAGER update -y kernel"
-                            $PKG_MANAGER update -y kernel
+                            eval "$PKG_MANAGER update -y kernel"
                             ;;
                         arch)
                             msg_info "Arch Linux 通过完整系统更新来更新内核..."
@@ -192,15 +267,20 @@ manage_kernel() {
                     esac
                     msg_ok "内核更新操作已完成。如果内核有版本变动，请重启系统以生效。"
                 fi
+                press_any_key
+                ;;
+            2)
+                update_and_cleanup_kernel
+                break 
                 ;;
             0)
                 break
                 ;;
             *)
                 msg_error "无效选项"
+                press_any_key
                 ;;
         esac
-        press_any_key
     done
 }
 
@@ -251,7 +331,7 @@ main() {
     while true; do
         clear
         echo -e "${COLOR_GREEN}========================================="
-        echo -e "        Linux 系统优化脚本 v1.3        "
+        echo -e "        Linux 系统优化脚本 v1.4        "
         echo -e "=========================================${COLOR_NC}"
         echo "  系统: ${OS_ID} ${OS_VER}"
         echo "  内核: $(uname -r)"
@@ -270,7 +350,6 @@ main() {
             0) msg_ok "感谢使用，再见！"; exit 0 ;;
             *) msg_error "无效的选择 '$main_choice'，请重新输入。" ;;
         esac
-        press_any_key
     done
 }
 
