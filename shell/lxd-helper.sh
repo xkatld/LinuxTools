@@ -28,24 +28,42 @@ check_root() {
 }
 
 check_dependencies() {
-    msg "BLUE" "正在检查核心依赖..."
-    local dependencies=("lxd" "jq" "wc" "lsblk" "curl" "truncate" "btrfs")
-    local missing_deps=()
-    for cmd in "${dependencies[@]}"; do
+    msg "BLUE" "正在检查并安装核心依赖..."
+    local apt_install_needed=()
+    
+    for pkg in jq btrfs-progs; do
+        local cmd=${pkg%-progs}
         if ! command -v "$cmd" &>/dev/null; then
-            missing_deps+=("$cmd")
+            apt_install_needed+=("$pkg")
         fi
     done
-    if [ ${#missing_deps[@]} -gt 0 ]; then
-        msg "RED" "错误: 脚本运行缺少以下核心命令: ${missing_deps[*]}"
+
+    if [ ${#apt_install_needed[@]} -gt 0 ]; then
+        msg "YELLOW" "检测到缺失的核心依赖: ${apt_install_needed[*]}，将自动尝试安装..."
         if command -v apt-get &>/dev/null; then
-            msg "YELLOW" "在 Debian/Ubuntu 系统上，您可以通过以下命令安装它们:"
-            msg "YELLOW" "sudo apt-get update && sudo apt-get install -y lxd jq btrfs-progs"
+            DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null
+            if ! DEBIAN_FRONTEND=noninteractive apt-get install -y "${apt_install_needed[@]}"; then
+                msg "RED" "自动安装依赖 (${apt_install_needed[*]}) 失败。请手动安装后重试。"
+                exit 1
+            fi
+            msg "GREEN" "依赖 ${apt_install_needed[*]} 安装成功。"
+        else
+            msg "RED" "错误: 此脚本依赖于 'apt' 来自动安装缺失的包。请手动安装: ${apt_install_needed[*]}"
+            exit 1
         fi
-        exit 1
     fi
+
+    local critical_deps=("curl" "lsblk" "wc" "jq" "btrfs")
+    for cmd in "${critical_deps[@]}"; do
+         if ! command -v "$cmd" &>/dev/null; then
+            msg "RED" "错误: 核心命令 '$cmd' 未找到。脚本无法继续。"
+            exit 1
+        fi
+    done
+
     msg "GREEN" "核心依赖检查通过。"
 }
+
 
 set_lxd_pool_as_default() {
     local pool_name="$1"
@@ -91,19 +109,30 @@ install_lxd() {
         return 1
     fi
 
-    msg "YELLOW" "检测到 LXD 未安装，即将开始 APT 安装流程。"
+    msg "YELLOW" "检测到 LXD 未安装，即将开始 Snap 安装流程。"
     read -p "$(msg "YELLOW" "确认开始安装 LXD 吗? [y/N]: ")" confirm
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
         msg "BLUE" "操作已由用户取消。"
         return
     fi
 
-    msg "BLUE" "步骤 1/2: 更新软件包列表..."
+    msg "BLUE" "步骤 1/4: 更新软件包列表..."
     sudo apt-get update -y
+
+    msg "BLUE" "步骤 2/4: 安装 snapd..."
+    if ! sudo apt-get install -y snapd; then
+        msg "RED" "通过 APT 安装 snapd 失败，请检查错误信息。"
+        return 1
+    fi
+
+    msg "BLUE" "步骤 3/4: 安装 snap core..."
+    if ! sudo snap install core; then
+        msg "YELLOW" "snap core 安装时出现警告，但这通常不影响LXD的安装。继续..."
+    fi
     
-    msg "BLUE" "步骤 2/2: 通过 APT 安装并初始化 LXD..."
-    if ! sudo apt-get install -y lxd; then
-        msg "RED" "通过 APT 安装 LXD 失败，请检查错误信息。"
+    msg "BLUE" "步骤 4/4: 通过 Snap 安装并初始化 LXD..."
+    if ! sudo snap install lxd; then
+        msg "RED" "通过 Snap 安装 LXD 失败，请检查错误信息。"
         return 1
     fi
 
@@ -113,7 +142,7 @@ install_lxd() {
     fi
     echo ""
     msg "GREEN" "==============================================="
-    msg "GREEN" "✓ LXD 安装并初始化完成！"
+    msg "GREEN" "✓ LXD (via Snap) 安装并初始化完成！"
     sudo lxd --version
     msg "GREEN" "==============================================="
 }
@@ -483,11 +512,19 @@ manage_btrfs_storage() {
             2) 
                 if ! command -v btrfs &>/dev/null; then
                     msg "RED" "错误: BTRFS 工具未安装。请先从菜单中选择安装。"
+                elif ! is_lxd_installed; then
+                    msg "RED" "错误: LXD 未安装。请先从主菜单安装 LXD。"
                 else
                     show_btrfs_creation_menu
                 fi
                 ;;
-            3) delete_btrfs_pool ;;
+            3) 
+                if ! is_lxd_installed; then
+                    msg "RED" "错误: LXD 未安装。请先从主菜单安装 LXD。"
+                else
+                    delete_btrfs_pool
+                fi
+                ;;
             4) return ;;
             *)
                 msg "RED" "无效的选项 '$btrfs_choice'，请重新输入。"
@@ -502,10 +539,10 @@ main_menu() {
     while true; do
         clear
         msg "BLUE" "#############################################"
-        msg "BLUE" "#            LXD 助手 (v2.2)              #"
+        msg "BLUE" "#            LXD 助手 (v2.3)              #"
         msg "BLUE" "#############################################"
         echo "请选择要执行的操作:"
-        echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境${COLOR_NC}"
+        echo -e "  1) ${COLOR_BLUE}安装或检查 LXD 环境 (Snap)${COLOR_NC}"
         echo -e "  2) ${COLOR_GREEN}备份所有 LXD 镜像${COLOR_NC}"
         echo -e "  3) ${COLOR_YELLOW}从备份恢复 LXD 镜像${COLOR_NC}"
         echo -e "  4) ${COLOR_CYAN}管理BTRFS储存池${COLOR_NC}"
@@ -515,12 +552,15 @@ main_menu() {
 
         case $main_choice in
             1) install_lxd ;;
-            2) backup_images ;;
-            3) restore_images ;;
+            2) 
+                if ! is_lxd_installed; then msg "RED" "错误: LXD 未安装。"; else backup_images; fi
+                ;;
+            3)
+                if ! is_lxd_installed; then msg "RED" "错误: LXD 未安装。"; else restore_images; fi
+                ;;
             4) manage_btrfs_storage ;;
             5)
-                msg "BLUE" "--- 当前本地LXD镜像列表 ---"
-                lxc image list
+                if ! is_lxd_installed; then msg "RED" "错误: LXD 未安装。"; else msg "BLUE" "--- 当前本地LXD镜像列表 ---"; lxc image list; fi
                 ;;
             6)
                 msg "BLUE" "脚本已退出。"
@@ -537,21 +577,4 @@ main_menu() {
 
 check_root
 check_dependencies
-
-if ! is_lxd_installed; then
-    clear
-    msg "RED" "检测到您的系统尚未安装 LXD。"
-    read -p "$(msg "YELLOW" "是否立即通过APT安装LXD? [y/N]: ")" install_now
-    if [[ "${install_now}" =~ ^[yY]$ ]]; then
-        install_lxd
-        if ! is_lxd_installed; then
-             msg "RED" "安装过程似乎未成功，脚本即将退出。"
-             exit 1
-        fi
-    else
-        msg "BLUE" "用户选择不安装，脚本退出。"
-        exit 0
-    fi
-fi
-
 main_menu
