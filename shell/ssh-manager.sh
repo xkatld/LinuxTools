@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 # +--------------------------------------------------------------------+
-# | Script Name:    SSH Manager (v2.2 Multi-Distro)                    |
+# | Script Name:    SSH Manager (v2.3 Auto-Heal)                       |
 # | Author:         xkatld & gemini                                    |
 # | Description:    一个安全、智能的SSH服务管理脚本。                  |
-# | Features:       自动检测并安装SSH服务, 自动处理防火墙和SELinux。   |
+# | Features:       自动修复缺失的Host Keys, 自动处理防火墙和SELinux。 |
 # | Compatibility:  Debian, Ubuntu, CentOS, RHEL, Fedora, AlmaLinux,   |
 # |                 Rocky Linux, openSUSE                              |
 # +--------------------------------------------------------------------+
@@ -18,12 +18,12 @@ readonly COLOR_GREEN='\033[0;32m'
 readonly COLOR_RED='\033[0;31m'
 readonly COLOR_YELLOW='\033[1;33m'
 readonly COLOR_CYAN='\033[0;36m'
-readonly COLOR_NC='\033[0m' # No Color
+readonly COLOR_NC='\033[0m'
 
 # 这些变量将在初始化函数中被赋值
 SSH_CONFIG_FILE=""
 SSH_SERVICE_NAME=""
-CURRENT_PORT="22" # 默认端口
+CURRENT_PORT="22"
 
 # OS-specific variables
 OS_ID=""
@@ -52,6 +52,13 @@ clear_screen() {
 }
 
 # --- 安装与初始化函数 ---
+
+check_root() {
+    if [[ "${EUID}" -ne 0 ]]; then
+        msg_error "此脚本需要 root 权限来安装/修改 SSH 配置和重启服务。"
+        exit 1
+    fi
+}
 
 detect_os() {
     if [ -f /etc/os-release ]; then
@@ -92,6 +99,28 @@ detect_os() {
     msg_info "检测到操作系统: $OS_ID, 包管理器: ${PKG_MANAGER:-'未识别'}"
 }
 
+check_ssh_host_keys() {
+    # 检查 /etc/ssh/ 目录下的主机密钥文件是否存在
+    if ! ls /etc/ssh/ssh_host_*_key &>/dev/null; then
+        msg_error "致命错误: 未在 /etc/ssh/ 目录中找到 SSH 主机密钥 (host keys)。"
+        msg_warn "这就是导致 'sshd: no hostkeys available -- exiting' 错误的直接原因。"
+        read -p "是否要立即自动为您生成主机密钥? (推荐: y): " confirm_gen_keys
+        if [[ "$confirm_gen_keys" =~ ^[yY]$ ]]; then
+            msg_info "正在执行 'ssh-keygen -A' 来生成所有类型的主机密钥..."
+            if ssh-keygen -A; then
+                msg_ok "主机密钥已成功生成！"
+            else
+                msg_error "主机密钥生成失败。请检查权限或尝试手动运行 'sudo ssh-keygen -A'。"
+                exit 1 # 这是一个关键失败，退出脚本
+            fi
+        else
+            msg_error "用户取消操作。在主机密钥生成之前，SSH 服务无法正常工作。"
+            exit 1
+        fi
+    fi
+}
+
+
 install_ssh_server() {
     msg_warn "未检测到 OpenSSH 服务器。是否立即安装？"
     read -p "请输入 'y' 进行安装，或按其他任意键退出: " confirm
@@ -130,13 +159,6 @@ install_ssh_server() {
     initialize_ssh_env
 }
 
-check_root() {
-    if [[ "${EUID}" -ne 0 ]]; then
-        msg_error "此脚本需要 root 权限来安装/修改 SSH 配置和重启服务。"
-        exit 1
-    fi
-}
-
 initialize_ssh_env() {
     local possible_configs=("/etc/ssh/sshd_config" "/etc/sshd_config" "/etc/openssh/sshd_config")
     for config in "${possible_configs[@]}"; do
@@ -152,6 +174,9 @@ initialize_ssh_env() {
     fi
     
     msg_info "检测到 SSH 配置文件: ${SSH_CONFIG_FILE}"
+
+    # 新增：在执行任何操作前，先检查并确保主机密钥存在
+    check_ssh_host_keys
 
     if command_exists "systemctl"; then
         local service_candidates=("sshd" "ssh")
