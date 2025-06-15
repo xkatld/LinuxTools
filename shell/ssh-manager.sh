@@ -1,35 +1,28 @@
 #!/bin/bash
-#
-# +--------------------------------------------------------------------+
-# | Script Name:    SSH Manager (v2.1 Full-Featured)                   |
-# | Author:         xkatld & gemini                                    |
-# | Description:    一个安全、智能的SSH服务管理脚本。                  |
-# | Features:       自动检测并安装SSH服务, 自动处理防火墙和SELinux。   |
-# +--------------------------------------------------------------------+
 
 set -o errexit
 set -o nounset
 set -o pipefail
 
-# --- 全局变量与常量 ---
 readonly COLOR_GREEN='\033[0;32m'
 readonly COLOR_RED='\033[0;31m'
 readonly COLOR_YELLOW='\033[1;33m'
 readonly COLOR_CYAN='\033[0;36m'
 readonly COLOR_NC='\033[0m'
 
-# 这两个变量将在初始化函数中被赋值
 SSH_CONFIG_FILE=""
 SSH_SERVICE_NAME=""
-CURRENT_PORT="22" # 默认端口
+CURRENT_PORT="22"
 
-# --- 消息与日志函数 ---
+OS_ID=""
+PKG_MANAGER=""
+INSTALL_CMD=""
+SSH_SERVER_PKG=""
+
 msg_info() { echo -e "${COLOR_CYAN}[*] $1${COLOR_NC}"; }
 msg_ok() { echo -e "${COLOR_GREEN}[+] $1${COLOR_NC}"; }
 msg_error() { echo -e "${COLOR_RED}[!] 错误: $1${COLOR_NC}" >&2; }
 msg_warn() { echo -e "${COLOR_YELLOW}[-] 警告: $1${COLOR_NC}"; }
-
-# --- 辅助函数 ---
 
 command_exists() {
     command -v "$1" &>/dev/null
@@ -43,7 +36,43 @@ clear_screen() {
     fi
 }
 
-# --- 安装与初始化函数 ---
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_ID=$ID
+    else
+        msg_error "无法检测到操作系统，/etc/os-release 文件不存在。"
+        exit 1
+    fi
+
+    case "$OS_ID" in
+        ubuntu|debian)
+            PKG_MANAGER="apt-get"
+            INSTALL_CMD="apt-get install -y"
+            SSH_SERVER_PKG="openssh-server"
+            ;;
+        centos|rhel|almalinux|rocky)
+            PKG_MANAGER="yum"
+            if command_exists "dnf"; then PKG_MANAGER="dnf"; fi
+            INSTALL_CMD="$PKG_MANAGER install -y"
+            SSH_SERVER_PKG="openssh-server"
+            ;;
+        fedora)
+            PKG_MANAGER="dnf"
+            INSTALL_CMD="dnf install -y"
+            SSH_SERVER_PKG="openssh-server"
+            ;;
+        opensuse*|sles)
+            PKG_MANAGER="zypper"
+            INSTALL_CMD="zypper install -y --no-confirm"
+            SSH_SERVER_PKG="openssh"
+            ;;
+        *)
+            msg_error "不支持的操作系统: $OS_ID. 将无法自动安装软件包。"
+            ;;
+    esac
+    msg_info "检测到操作系统: $OS_ID, 包管理器: ${PKG_MANAGER:-'未识别'}"
+}
 
 install_ssh_server() {
     msg_warn "未检测到 OpenSSH 服务器。是否立即安装？"
@@ -53,32 +82,33 @@ install_ssh_server() {
         exit 0
     fi
     
-    msg_info "正在尝试安装 OpenSSH Server..."
-    if command_exists "apt-get"; then
-        msg_info "检测到 APT 包管理器 (Debian/Ubuntu)..."
+    if [[ -z "$PKG_MANAGER" || -z "$INSTALL_CMD" || -z "$SSH_SERVER_PKG" ]]; then
+        msg_error "由于操作系统不受支持或无法识别，无法自动安装。请手动安装 SSH 服务器。"
+        exit 1
+    fi
+
+    msg_info "正在尝试使用 ${PKG_MANAGER} 安装 ${SSH_SERVER_PKG}..."
+    
+    if [[ "$PKG_MANAGER" == "apt-get" ]]; then
+        msg_info "正在运行 'apt-get update'..."
         apt-get update
-        apt-get install -y openssh-server
-    elif command_exists "yum"; then
-        msg_info "检测到 YUM 包管理器 (CentOS/RHEL)..."
-        yum install -y openssh-server
-    elif command_exists "dnf"; then
-        msg_info "检测到 DNF 包管理器 (Fedora/RHEL)..."
-        dnf install -y openssh-server
+    fi
+
+    if eval "$INSTALL_CMD $SSH_SERVER_PKG"; then
+        msg_ok "${SSH_SERVER_PKG} 安装成功！"
     else
-        msg_error "未找到支持的包管理器 (apt, yum, dnf)。请手动安装 openssh-server。"
+        msg_error "${SSH_SERVER_PKG} 安装失败，请检查安装日志。"
         exit 1
     fi
     
     if ! command_exists "sshd"; then
-        msg_error "OpenSSH Server 安装失败，请检查安装日志。"
+        msg_error "sshd 命令依然未找到，安装可能已失败。"
         exit 1
     fi
     
-    msg_ok "OpenSSH Server 安装成功！正在重新初始化环境..."
-    # 清空变量，以便重新检测
+    msg_info "正在重新初始化环境..."
     SSH_CONFIG_FILE=""
     SSH_SERVICE_NAME=""
-    # 递归调用初始化函数来设置新环境
     initialize_ssh_env
 }
 
@@ -89,9 +119,7 @@ check_root() {
     fi
 }
 
-# 检测 SSH 配置文件、服务和当前端口
 initialize_ssh_env() {
-    # 检测配置文件
     local possible_configs=("/etc/ssh/sshd_config" "/etc/sshd_config" "/etc/openssh/sshd_config")
     for config in "${possible_configs[@]}"; do
         if [[ -f "$config" ]]; then
@@ -100,18 +128,17 @@ initialize_ssh_env() {
         fi
     done
     
-    # 如果找不到配置文件，则触发安装流程
     if [[ -z "$SSH_CONFIG_FILE" ]]; then
         install_ssh_server
-        return # 安装函数会处理后续逻辑或退出
+        return
     fi
     
     msg_info "检测到 SSH 配置文件: ${SSH_CONFIG_FILE}"
 
-    # 检测服务名
     if command_exists "systemctl"; then
-        for service in sshd ssh; do
-            if systemctl list-units --type=service --all | grep -q "${service}.service"; then
+        local service_candidates=("sshd" "ssh")
+        for service in "${service_candidates[@]}"; do
+            if systemctl list-unit-files --type=service | grep -q "^${service}\.service"; then
                 SSH_SERVICE_NAME="$service"
                 break
             fi
@@ -124,13 +151,13 @@ initialize_ssh_env() {
             fi
         done
     fi
+
     if [[ -z "$SSH_SERVICE_NAME" ]]; then
         msg_warn "未找到 systemd 或 init.d 的 SSH 服务。将无法自动重启服务。"
     else
         msg_info "检测到 SSH 服务: ${SSH_SERVICE_NAME}"
     fi
 
-    # 获取当前端口 (优先使用sshd -T的精确值)
     if command_exists sshd; then
         CURRENT_PORT=$(sshd -T | grep -i '^port ' | awk '{print $2}' || echo "22")
     else
@@ -138,9 +165,6 @@ initialize_ssh_env() {
     fi
 }
 
-# --- 核心管理功能 (这部分代码保持不变，此处省略以便聚焦修改点) ---
-# backup_config(), set_config_value(), restart_ssh_service(), ...
-# ... (此处粘贴之前版本中从 backup_config 到 show_current_config 的所有函数)
 backup_config() {
     local backup_file="${SSH_CONFIG_FILE}.backup_$(date +%Y%m%d_%H%M%S)"
     msg_info "正在备份当前配置到: ${backup_file}"
@@ -168,7 +192,7 @@ restart_ssh_service() {
 
     msg_info "正在重启 SSH 服务 (${SSH_SERVICE_NAME})..."
     if command_exists "systemctl"; then
-        systemctl restart "${SSH_SERVICE_NAME}"
+        systemctl restart "${SSH_SERVICE_NAME}.service"
     elif command_exists "service"; then
         service "${SSH_SERVICE_NAME}" restart
     fi
@@ -177,7 +201,7 @@ restart_ssh_service() {
         msg_ok "SSH 服务重启成功。"
     else
         msg_error "SSH 服务重启失败，请检查服务状态和配置文件。您可能需要从备份中恢复。"
-        exit 1 # 重启失败是严重问题，直接退出
+        exit 1
     fi
 }
 
@@ -198,16 +222,16 @@ manage_firewall() {
 
     if command_exists "firewall-cmd"; then
         msg_info "检测到 firewalld，正在更新规则..."
-        firewall-cmd --permanent --add-port=${new_port}/tcp
-        if [[ "$old_port" != "22" ]]; then # 不要移除默认的22端口服务，以防万一
-             firewall-cmd --permanent --remove-port=${old_port}/tcp || true
+        firewall-cmd --permanent --add-port="${new_port}/tcp"
+        if [[ "$old_port" != "22" ]]; then
+             firewall-cmd --permanent --remove-port="${old_port}/tcp" || true
         fi
         firewall-cmd --reload
         msg_ok "firewalld 规则已更新。"
     elif command_exists "ufw"; then
         msg_info "检测到 ufw，正在更新规则..."
-        ufw allow ${new_port}/tcp
-        ufw delete allow ${old_port}/tcp || true
+        ufw allow "${new_port}/tcp"
+        ufw delete allow "${old_port}/tcp" >/dev/null 2>&1 || true
         msg_ok "ufw 规则已更新。"
     fi
 }
@@ -218,10 +242,18 @@ manage_selinux_port() {
         msg_info "检测到 SELinux 已启用。"
         if command_exists "semanage"; then
             msg_info "正在为新端口 ${new_port} 添加 SELinux 上下文..."
-            semanage port -a -t ssh_port_t -p tcp "$new_port" || msg_warn "添加SELinux端口上下文失败，可能已存在。"
-            msg_ok "SELinux 端口上下文已处理。"
+            if semanage port -a -t ssh_port_t -p tcp "$new_port" &>/dev/null; then
+                msg_ok "SELinux 端口上下文已成功添加。"
+            else
+                msg_info "添加 SELinux 端口上下文失败，可能已存在，尝试修改..."
+                if semanage port -m -t ssh_port_t -p tcp "$new_port" &>/dev/null; then
+                    msg_ok "SELinux 端口上下文已成功修改。"
+                else
+                    msg_warn "添加或修改 SELinux 端口上下文失败。请手动检查: semanage port -l | grep ssh"
+                fi
+            fi
         else
-            msg_warn "检测到 SELinux，但 'semanage' 命令未找到 (请安装 policycoreutils-python-utils 或类似包)。请手动配置SELinux！"
+            msg_warn "检测到 SELinux，但 'semanage' 命令未找到 (请安装提供此命令的包，例如 'policycoreutils-python-utils')。请手动配置SELinux！"
         fi
     fi
 }
@@ -244,12 +276,11 @@ modify_ssh_port() {
     backup_config
     set_config_value "Port" "$new_port"
     
-    # 智能处理 SELinux 和防火墙
     manage_selinux_port "$new_port"
     manage_firewall "$new_port" "$CURRENT_PORT"
 
     restart_ssh_service
-    CURRENT_PORT="$new_port" # 更新当前端口状态
+    CURRENT_PORT="$new_port"
     msg_ok "SSH 端口已成功修改为 ${new_port}。请记得使用新端口连接！"
 }
 
@@ -277,19 +308,15 @@ toggle_password_auth() {
 }
 
 show_current_config() {
-    msg_info "--- 当前生效的 SSH 关键配置 (来自 sshd -T) ---"
+    msg_info "--- 当前生效的 SSH 关键配置 ---"
     if command_exists sshd; then
-        # 使用 sshd -T 获取最准确的当前生效配置
         sshd -T | grep -iE '^(port|permitrootlogin|passwordauthentication)'
     else
-        # 降级方案：如果 sshd 命令不可用，则从文件 grep
-        msg_warn "无法使用 'sshd -T'，配置可能不完全准确。"
+        msg_warn "无法使用 'sshd -T'，将从配置文件读取，可能不完全准确。"
         grep -iE "^\s*#?\s*(Port|PermitRootLogin|PasswordAuthentication)" "$SSH_CONFIG_FILE" | sed "s/^#\s*//g"
     fi
     echo "--------------------------------------------------"
 }
-
-# --- 主菜单与脚本入口 ---
 
 main_menu() {
     while true; do
@@ -317,7 +344,7 @@ main_menu() {
     done
 }
 
-# --- 脚本执行入口 ---
 check_root
+detect_os
 initialize_ssh_env
 main_menu
