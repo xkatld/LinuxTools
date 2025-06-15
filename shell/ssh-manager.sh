@@ -1,28 +1,43 @@
 #!/bin/bash
+#
+# +--------------------------------------------------------------------+
+# | Script Name:    SSH Manager (v2.2 Multi-Distro)                    |
+# | Author:         xkatld & gemini                                    |
+# | Description:    一个安全、智能的SSH服务管理脚本。                  |
+# | Features:       自动检测并安装SSH服务, 自动处理防火墙和SELinux。   |
+# | Compatibility:  Debian, Ubuntu, CentOS, RHEL, Fedora, AlmaLinux,   |
+# |                 Rocky Linux, openSUSE                              |
+# +--------------------------------------------------------------------+
 
 set -o errexit
 set -o nounset
 set -o pipefail
 
+# --- 全局变量与常量 ---
 readonly COLOR_GREEN='\033[0;32m'
 readonly COLOR_RED='\033[0;31m'
 readonly COLOR_YELLOW='\033[1;33m'
 readonly COLOR_CYAN='\033[0;36m'
-readonly COLOR_NC='\033[0m'
+readonly COLOR_NC='\033[0m' # No Color
 
+# 这些变量将在初始化函数中被赋值
 SSH_CONFIG_FILE=""
 SSH_SERVICE_NAME=""
-CURRENT_PORT="22"
+CURRENT_PORT="22" # 默认端口
 
+# OS-specific variables
 OS_ID=""
 PKG_MANAGER=""
 INSTALL_CMD=""
 SSH_SERVER_PKG=""
 
+# --- 消息与日志函数 ---
 msg_info() { echo -e "${COLOR_CYAN}[*] $1${COLOR_NC}"; }
 msg_ok() { echo -e "${COLOR_GREEN}[+] $1${COLOR_NC}"; }
 msg_error() { echo -e "${COLOR_RED}[!] 错误: $1${COLOR_NC}" >&2; }
 msg_warn() { echo -e "${COLOR_YELLOW}[-] 警告: $1${COLOR_NC}"; }
+
+# --- 辅助函数 ---
 
 command_exists() {
     command -v "$1" &>/dev/null
@@ -36,8 +51,11 @@ clear_screen() {
     fi
 }
 
+# --- 安装与初始化函数 ---
+
 detect_os() {
     if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         OS_ID=$ID
     else
@@ -165,6 +183,7 @@ initialize_ssh_env() {
     fi
 }
 
+# --- 核心管理功能 ---
 backup_config() {
     local backup_file="${SSH_CONFIG_FILE}.backup_$(date +%Y%m%d_%H%M%S)"
     msg_info "正在备份当前配置到: ${backup_file}"
@@ -318,6 +337,8 @@ show_current_config() {
     echo "--------------------------------------------------"
 }
 
+# --- 主菜单与脚本入口 ---
+
 main_menu() {
     while true; do
         clear_screen
@@ -344,6 +365,7 @@ main_menu() {
     done
 }
 
+# --- 脚本执行入口 ---
 check_root
 detect_os
 initialize_ssh_env
