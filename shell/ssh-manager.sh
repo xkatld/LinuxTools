@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 # +--------------------------------------------------------------------+
-# | Script Name:    SSH Manager (v2.0 Enhanced)                        |
+# | Script Name:    SSH Manager (v2.1 Full-Featured)                   |
 # | Author:         xkatld & gemini                                    |
 # | Description:    一个安全、智能的SSH服务管理脚本。                  |
-# | Features:       自动处理防火墙和SELinux，防止用户被锁定。          |
+# | Features:       自动检测并安装SSH服务, 自动处理防火墙和SELinux。   |
 # +--------------------------------------------------------------------+
 
 set -o errexit
@@ -43,11 +43,48 @@ clear_screen() {
     fi
 }
 
-# --- 初始化与检查函数 ---
+# --- 安装与初始化函数 ---
+
+install_ssh_server() {
+    msg_warn "未检测到 OpenSSH 服务器。是否立即安装？"
+    read -p "请输入 'y' 进行安装，或按其他任意键退出: " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        msg_info "操作已由用户取消。"
+        exit 0
+    fi
+    
+    msg_info "正在尝试安装 OpenSSH Server..."
+    if command_exists "apt-get"; then
+        msg_info "检测到 APT 包管理器 (Debian/Ubuntu)..."
+        apt-get update
+        apt-get install -y openssh-server
+    elif command_exists "yum"; then
+        msg_info "检测到 YUM 包管理器 (CentOS/RHEL)..."
+        yum install -y openssh-server
+    elif command_exists "dnf"; then
+        msg_info "检测到 DNF 包管理器 (Fedora/RHEL)..."
+        dnf install -y openssh-server
+    else
+        msg_error "未找到支持的包管理器 (apt, yum, dnf)。请手动安装 openssh-server。"
+        exit 1
+    fi
+    
+    if ! command_exists "sshd"; then
+        msg_error "OpenSSH Server 安装失败，请检查安装日志。"
+        exit 1
+    fi
+    
+    msg_ok "OpenSSH Server 安装成功！正在重新初始化环境..."
+    # 清空变量，以便重新检测
+    SSH_CONFIG_FILE=""
+    SSH_SERVICE_NAME=""
+    # 递归调用初始化函数来设置新环境
+    initialize_ssh_env
+}
 
 check_root() {
     if [[ "${EUID}" -ne 0 ]]; then
-        msg_error "此脚本需要 root 权限来修改 SSH 配置和重启服务。"
+        msg_error "此脚本需要 root 权限来安装/修改 SSH 配置和重启服务。"
         exit 1
     fi
 }
@@ -62,10 +99,13 @@ initialize_ssh_env() {
             break
         fi
     done
+    
+    # 如果找不到配置文件，则触发安装流程
     if [[ -z "$SSH_CONFIG_FILE" ]]; then
-        msg_error "未找到任何标准的 sshd_config 文件。"
-        exit 1
+        install_ssh_server
+        return # 安装函数会处理后续逻辑或退出
     fi
+    
     msg_info "检测到 SSH 配置文件: ${SSH_CONFIG_FILE}"
 
     # 检测服务名
@@ -98,8 +138,9 @@ initialize_ssh_env() {
     fi
 }
 
-# --- 核心功能函数 ---
-
+# --- 核心管理功能 (这部分代码保持不变，此处省略以便聚焦修改点) ---
+# backup_config(), set_config_value(), restart_ssh_service(), ...
+# ... (此处粘贴之前版本中从 backup_config 到 show_current_config 的所有函数)
 backup_config() {
     local backup_file="${SSH_CONFIG_FILE}.backup_$(date +%Y%m%d_%H%M%S)"
     msg_info "正在备份当前配置到: ${backup_file}"
@@ -143,6 +184,11 @@ restart_ssh_service() {
 manage_firewall() {
     local new_port=$1
     local old_port=$2
+
+    if ! command_exists "firewall-cmd" && ! command_exists "ufw"; then
+        msg_warn "未检测到 firewalld 或 ufw，跳过防火墙配置。请记得手动允许新端口！"
+        return
+    fi
 
     read -p "是否需要自动更新防火墙规则? (y/N): " confirm
     if [[ ! "$confirm" =~ ^[yY]$ ]]; then
@@ -242,6 +288,8 @@ show_current_config() {
     fi
     echo "--------------------------------------------------"
 }
+
+# --- 主菜单与脚本入口 ---
 
 main_menu() {
     while true; do
