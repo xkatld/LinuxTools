@@ -110,7 +110,7 @@ function configure_architecture_specifics() {
         log_info "为 AMD64 架构使用 Proxmox 官方软件源。"
         MIRROR_BASE="http://download.proxmox.com/debian/pve"
         PVE_REPO_COMPONENT="pve-no-subscription"
-        PVE_GPG_KEY_URL="http://enterprise.proxmox.com/proxmox-release-${DEBIAN_CODENAME}.gpg"
+        PVE_GPG_KEY_URL="https://enterprise.proxmox.com/debian/proxmox-release-${DEBIAN_CODENAME}.gpg"
     else
         # 修正之处：为 ARM64 单独处理 URL，确保路径正确
         log_info "为 ARM64 架构选择第三方镜像源。"
