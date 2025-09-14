@@ -29,4 +29,5 @@ modelscope download --model IndexTeam/IndexTTS-2 --local_dir checkpoints
 # 检查 GPU 配置
 uv run tools/gpu_check.py
 
-echo "安装完成！运行 uv run webui.py 启动应用"
+# 启动应用
+uv run webui.py
