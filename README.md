@@ -2,10 +2,10 @@
 自用linux小工具脚本
 ### 命令
 ~~~
-bash <(curl -s https://git.fsytool.top/xkatld/linuxtools/raw/branch/main/linuxtools.sh)
+bash <(curl -s https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/linuxtools.sh)
 ~~~
 ~~~
-wget -qO- https://git.fsytool.top/xkatld/linuxtools/raw/branch/main/linuxtools.sh | bash
+wget -qO- https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/linuxtools.sh | bash
 ~~~
 ### 项目截图
 
