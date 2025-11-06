@@ -216,7 +216,7 @@ install_proxmox() {
     local gpg_key_name gpg_key_path
     gpg_key_name=$(basename "$PVE_GPG_KEY_URL")
     
-    if [[ "$DEBIAN_CODENAME" == "trixie" ]]; then
+    if [[ "$DEBIAN_CODENAME" == "trixie" && "$SYSTEM_ARCH" == "amd64" ]]; then
         gpg_key_path="/usr/share/keyrings/${gpg_key_name}"
         mkdir -p /usr/share/keyrings
     else
@@ -231,8 +231,19 @@ install_proxmox() {
     log_info "GPG 密钥: ${gpg_key_path}"
 
     log_info "配置 APT 源..."
-    echo "deb ${MIRROR_BASE} ${DEBIAN_CODENAME} ${PVE_REPO_COMPONENT}" > /etc/apt/sources.list.d/pve.list
-    log_info "APT 源: ${MIRROR_BASE}"
+    if [[ "$DEBIAN_CODENAME" == "trixie" && "$SYSTEM_ARCH" == "amd64" ]]; then
+        cat > /etc/apt/sources.list.d/pve-install-repo.sources << EOF
+Types: deb
+URIs: ${MIRROR_BASE}
+Suites: ${DEBIAN_CODENAME}
+Components: ${PVE_REPO_COMPONENT}
+Signed-By: ${gpg_key_path}
+EOF
+        log_info "APT 源: ${MIRROR_BASE} (deb822)"
+    else
+        echo "deb ${MIRROR_BASE} ${DEBIAN_CODENAME} ${PVE_REPO_COMPONENT}" > /etc/apt/sources.list.d/pve.list
+        log_info "APT 源: ${MIRROR_BASE}"
+    fi
     
     log_info "更新软件包列表..."
     if ! apt-get update; then
@@ -240,9 +251,19 @@ install_proxmox() {
         exit 1
     fi
     
+    log_info "预配置 GRUB..."
+    echo 'grub-pc grub-pc/install_devices_empty boolean true' | debconf-set-selections 2>/dev/null || true
+    
+    log_info "升级系统..."
+    export DEBIAN_FRONTEND=noninteractive
+    if ! apt-get full-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"; then
+        log_error "apt-get full-upgrade 失败"
+        exit 1
+    fi
+    
     log_info "安装 Proxmox VE (需要几分钟)..."
     export DEBIAN_FRONTEND=noninteractive
-    if ! apt-get install -y proxmox-ve postfix open-iscsi chrony; then
+    if ! apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" proxmox-ve postfix open-iscsi chrony; then
         log_error "Proxmox VE 安装失败"
         exit 1
     fi
