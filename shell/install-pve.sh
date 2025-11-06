@@ -267,6 +267,13 @@ EOF
         log_error "Proxmox VE 安装失败"
         exit 1
     fi
+    
+    log_info "清理安装源..."
+    rm -f /etc/apt/sources.list.d/pve-install-repo.sources
+    rm -f /etc/apt/sources.list.d/pve-install-repo.list
+    rm -f /etc/apt/sources.list.d/pve-enterprise.list
+    rm -f /etc/apt/sources.list.d/pve-enterprise.sources
+    rm -f /etc/apt/sources.list.d/ceph.list
 
     log_info "安装完成"
 }
