@@ -1,5 +1,4 @@
 #!/bin/bash
-# Linux Toolbox v3.0 - Author: xkatld
 
 set -o errexit
 set -o nounset
@@ -24,10 +23,10 @@ readonly COLOR_YELLOW='\033[1;33m'
 readonly COLOR_CYAN='\033[0;36m'
 readonly COLOR_NC='\033[0m'
 
-msg_info() { echo -e "${COLOR_CYAN}[*] $1${COLOR_NC}"; }
-msg_ok() { echo -e "${COLOR_GREEN}[+] $1${COLOR_NC}"; }
-msg_error() { echo -e "${COLOR_RED}[!] 错误: $1${COLOR_NC}" >&2; }
-msg_warn() { echo -e "${COLOR_YELLOW}[-] 警告: $1${COLOR_NC}"; }
+msg_info() { echo -e "${COLOR_CYAN}[INFO] $1${COLOR_NC}"; }
+msg_ok() { echo -e "${COLOR_GREEN}[OK] $1${COLOR_NC}"; }
+msg_error() { echo -e "${COLOR_RED}[ERROR] $1${COLOR_NC}" >&2; }
+msg_warn() { echo -e "${COLOR_YELLOW}[WARN] $1${COLOR_NC}"; }
 
 check_root() {
     [[ "${EUID}" -ne 0 ]] && { msg_error "此脚本需要 root 权限，请使用 'sudo' 运行。"; exit 1; }
@@ -65,13 +64,14 @@ execute_remote_script() {
     chmod +x "$temp_script"
     
     msg_warn "即将执行网络脚本: ${url}"
-    read -p "是否继续? (y/N): " -r confirm
-    [[ ! "$confirm" =~ ^[yY]$ ]] && { msg_info "操作已取消。"; return 0; }
+    read -p "是否继续? (Y/n): " -r confirm
+    confirm=${confirm:-Y}
+    [[ "$confirm" =~ ^[nN]$ ]] && { msg_info "操作已取消。"; return 0; }
     
-    echo -e "\n${COLOR_CYAN}==================== 开始执行 ====================${COLOR_NC}\n"
+    echo
     bash "$temp_script"
     local exit_code=$?
-    echo -e "\n${COLOR_CYAN}==================== 执行完毕 ====================${COLOR_NC}\n"
+    echo
     
     if [[ $exit_code -eq 0 ]]; then
         msg_ok "'${description}' 执行成功。"
