@@ -1,52 +1,44 @@
 #!/bin/bash
 
-set -o errexit
-set -o nounset
-set -o pipefail
+set -euo pipefail
 
 readonly SWAP_FILE_PATH="/swapfile"
 
-readonly COLOR_GREEN='\033[0;32m'
-readonly COLOR_YELLOW='\033[1;33m'
-readonly COLOR_RED='\033[0;31m'
-readonly COLOR_BLUE='\033[0;34m'
-readonly COLOR_NC='\033[0m'
-
-msg() {
-    local color_name="$1"
-    local message="$2"
-    local color_var="COLOR_${color_name^^}"
-    echo -e "${!color_var}${message}${COLOR_NC}"
-}
+log_info() { echo "[INFO] $1"; }
+log_ok() { echo "[OK] $1"; }
+log_error() { echo "[ERROR] $1" >&2; }
+log_warn() { echo "[WARN] $1"; }
 
 initial_checks() {
     if [[ "${EUID}" -ne 0 ]]; then
-        msg "RED" "错误：此脚本需要 root 权限才能修改系统设置。"
+        log_error "需要 root 权限"
         exit 1
     fi
 
     if [[ -d "/proc/vz" ]]; then
-        msg "RED" "错误：不支持 OpenVZ 虚拟化环境，因为它无法修改内核和 Swap。"
+        log_error "不支持 OpenVZ 虚拟化环境"
         exit 1
     fi
 
     local dependencies=("free" "grep" "sed" "awk" "systemctl" "dpkg" "apt-get" "modprobe")
     for cmd in "${dependencies[@]}"; do
-        if ! command -v "$cmd" &> /dev/null; then
-            msg "RED" "错误: 缺少核心命令 '$cmd'，请先安装它。"
+        if ! command -v "$cmd" &>/dev/null; then
+            log_error "缺少命令: $cmd"
             exit 1
         fi
     done
 }
 
 show_status() {
-    msg "BLUE" "--- 当前系统虚拟内存状态 ---"
-    echo "Swap 摘要:"
-    swapon --summary || msg "YELLOW" "  -> 当前没有活动的 Swap 设备。"
     echo ""
-    echo "内存使用情况:"
+    echo "=> 当前虚拟内存状态"
+    echo ""
+    echo "Swap 摘要:"
+    swapon --summary 2>/dev/null || echo "  -> 无活动 Swap"
+    echo ""
+    echo "内存使用:"
     free -h
-    echo "------------------------------------"
+    echo "========================================"
 }
 
 detect_zram_service() {
@@ -59,77 +51,83 @@ detect_zram_service() {
     fi
 }
 
-check_zram_module_support() {
-    msg "YELLOW" "正在检查内核是否支持 ZRAM 模块..."
+check_zram_support() {
     if modprobe --dry-run zram &>/dev/null; then
-        msg "GREEN" "✓ 内核支持 ZRAM 模块。"
         return 0
     else
-        msg "RED" "错误: 您当前的内核 ($(uname -r)) 似乎不支持 ZRAM 模块。"
-        msg "YELLOW" "这在某些云厂商提供的定制内核中很常见。"
-        msg "YELLOW" "请考虑使用本脚本中的 Swap 文件功能作为替代，或更换为标准的 Linux 内核。"
+        log_error "内核不支持 ZRAM 模块"
         return 1
     fi
 }
 
 configure_zram() {
-    msg "BLUE" "--- [ZRAM] 安装并配置 ZRAM ---"
-    if ! check_zram_module_support; then
+    echo ""
+    echo "=> 配置 ZRAM"
+    echo ""
+    
+    if ! check_zram_support; then
+        log_warn "请使用 Swap 文件功能"
         return 1
     fi
 
-    msg "YELLOW" "正在安装 zram-tools (若未安装)..."
+    log_info "安装 zram-tools..."
     DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null && apt-get install -y zram-tools
 
     local zram_details
     zram_details=$(detect_zram_service)
     if [[ -z "$zram_details" ]]; then
-        msg "RED" "错误: 安装 zram-tools 后，未能侦测到任何已知的 ZRAM 服务。无法继续。"
+        log_error "未检测到 ZRAM 服务"
         return 1
     fi
 
     local config_file service_name
     read -r config_file service_name <<< "$zram_details"
-    msg "GREEN" "侦测到 ZRAM 服务: $service_name"
+    log_info "检测到服务: $service_name"
+
+    local physical_mem
+    physical_mem=$(free -m | awk '/^Mem:/{print $2}')
+    local default_zram=$((physical_mem / 2))
 
     local zram_size
     while true; do
-        read -p "请输入 ZRAM 大小 (MB, 推荐值为物理内存的50%-100%): " zram_size
+        read -p "ZRAM 大小 (MB) [默认: ${default_zram}]: " -r zram_size
+        zram_size=${zram_size:-$default_zram}
         if [[ "$zram_size" =~ ^[1-9][0-9]*$ ]]; then
             break
         else
-            msg "RED" "输入无效，请输入一个正整数。"
+            log_error "请输入有效数字"
         fi
     done
 
-    msg "YELLOW" "正在向 '$config_file' 写入配置..."
+    log_info "写入配置..."
     echo -e "ALGO=zstd\nSIZE=${zram_size}" > "$config_file"
 
-    msg "YELLOW" "正在重启 ZRAM 服务 ($service_name) 以应用配置..."
+    log_info "重启服务..."
     if systemctl restart "$service_name"; then
-        echo ""
-        msg "GREEN" "✓ ZRAM 已成功配置并启用！"
+        log_ok "ZRAM 已配置并启用"
     else
-        echo ""
-        msg "RED" "ZRAM 服务启动失败。请运行 'systemctl status $service_name' 和 'journalctl -xeu $service_name' 查看详细错误。"
+        log_error "服务启动失败"
         return 1
     fi
 }
 
 remove_zram() {
-    msg "BLUE" "--- [ZRAM] 移除 ZRAM ---"
+    echo ""
+    echo "=> 移除 ZRAM"
+    echo ""
+    
     local zram_details
     zram_details=$(detect_zram_service)
 
     if [[ -z "$zram_details" ]] && ! dpkg -s "zram-tools" &>/dev/null; then
-        msg "RED" "错误: 未检测到 ZRAM 服务或 zram-tools 包，无需移除。"
+        log_error "未检测到 ZRAM"
         return 1
     fi
 
-    msg "RED" "警告：此操作将停止 ZRAM 服务并卸载 zram-tools 包！"
-    read -p "$(echo -e "${COLOR_YELLOW}您确定要继续吗? [y/N]: ${COLOR_NC}")" confirm
+    read -p "确认移除 ZRAM? [y/N]: " -r confirm
+    confirm=${confirm:-N}
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
-        msg "BLUE" "操作已由用户取消。"
+        log_info "已取消"
         return
     fi
 
@@ -137,101 +135,112 @@ remove_zram() {
         local service_name
         service_name=$(echo "$zram_details" | awk '{print $2}')
         if systemctl is-active --quiet "$service_name"; then
-            msg "YELLOW" "正在停止并禁用服务: $service_name..."
+            log_info "停止服务..."
             systemctl stop "$service_name"
             systemctl disable "$service_name"
         fi
     fi
 
     if dpkg -s "zram-tools" &>/dev/null; then
-        msg "YELLOW" "正在卸载 zram-tools 并清理配置..."
+        log_info "卸载 zram-tools..."
         apt-get purge -y zram-tools >/dev/null
     fi
     
-    echo ""
-    msg "GREEN" "✓ ZRAM 已成功移除！"
+    log_ok "ZRAM 已移除"
 }
 
 create_swap_file() {
-    msg "BLUE" "--- [Swap文件] 添加 Swap 文件 ---"
+    echo ""
+    echo "=> 创建 Swap 文件"
+    echo ""
+    
     if grep -q "${SWAP_FILE_PATH}" /etc/fstab; then
-        msg "RED" "错误: Swap 文件 '${SWAP_FILE_PATH}' 的配置已存在于 /etc/fstab。"
+        log_error "Swap 文件已存在"
         return 1
     fi
 
+    local physical_mem
+    physical_mem=$(free -m | awk '/^Mem:/{print $2}')
+    local default_swap=$((physical_mem * 2))
+
     local swap_size
     while true; do
-        read -p "请输入 Swap 文件大小 (MB, 推荐值为物理内存的1-2倍): " swap_size
+        read -p "Swap 大小 (MB) [默认: ${default_swap}]: " -r swap_size
+        swap_size=${swap_size:-$default_swap}
         if [[ "$swap_size" =~ ^[1-9][0-9]*$ ]]; then
             break
         else
-            msg "RED" "输入无效，请输入一个正整数。"
+            log_error "请输入有效数字"
         fi
     done
 
-    msg "YELLOW" "正在创建 ${swap_size}MB 的 Swap 文件于 '${SWAP_FILE_PATH}'..."
+    log_info "创建 ${swap_size}MB Swap 文件..."
     fallocate -l "${swap_size}M" "${SWAP_FILE_PATH}"
     chmod 600 "${SWAP_FILE_PATH}"
     mkswap "${SWAP_FILE_PATH}"
     swapon "${SWAP_FILE_PATH}"
     
-    msg "YELLOW" "正在将 Swap 配置写入 /etc/fstab 以便开机自启..."
+    log_info "写入 /etc/fstab..."
     echo "${SWAP_FILE_PATH} none swap sw 0 0" >> /etc/fstab
 
-    echo ""
-    msg "GREEN" "✓ Swap 文件已成功创建并启用！"
+    log_ok "Swap 文件已创建并启用"
 }
 
 remove_swap_file() {
-    msg "BLUE" "--- [Swap文件] 移除 Swap 文件 ---"
-    if ! grep -q "${SWAP_FILE_PATH}" /etc/fstab && [ ! -f "${SWAP_FILE_PATH}" ]; then
-        msg "RED" "错误: 未找到 Swap 文件或其配置，无需移除。"
+    echo ""
+    echo "=> 移除 Swap 文件"
+    echo ""
+    
+    if ! grep -q "${SWAP_FILE_PATH}" /etc/fstab && [[ ! -f "${SWAP_FILE_PATH}" ]]; then
+        log_error "未找到 Swap 文件"
         return 1
     fi
 
-    msg "RED" "警告：此操作将永久禁用并删除 Swap 文件！"
-    read -p "$(echo -e "${COLOR_YELLOW}您确定要继续吗? [y/N]: ${COLOR_NC}")" confirm
+    read -p "确认删除 Swap 文件? [y/N]: " -r confirm
+    confirm=${confirm:-N}
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
-        msg "BLUE" "操作已由用户取消。"
+        log_info "已取消"
         return
     fi
 
-    msg "YELLOW" "正在禁用并从 /etc/fstab 中移除配置..."
-    swapoff "${SWAP_FILE_PATH}" 2>/dev/null
+    log_info "禁用并移除配置..."
+    swapoff "${SWAP_FILE_PATH}" 2>/dev/null || true
     sed -i.bak "\#${SWAP_FILE_PATH}#d" /etc/fstab
 
-    msg "YELLOW" "正在删除 Swap 物理文件..."
+    log_info "删除文件..."
     rm -f "${SWAP_FILE_PATH}"
     
-    echo ""
-    msg "GREEN" "✓ Swap 文件已成功移除！原 /etc/fstab 已备份为 /etc/fstab.bak"
+    log_ok "Swap 文件已移除"
 }
 
 main_menu() {
     while true; do
-        clear
-        msg "BLUE" "##################################################"
-        msg "BLUE" "#         虚拟内存管理脚本 (v1.3)          #"
-        msg "BLUE" "##################################################"
+        clear 2>/dev/null || printf '\033[2J\033[H'
+        
+        echo "========================================"
+        echo "  虚拟内存管理"
+        echo "========================================"
         show_status
-        echo "请选择操作:"
-        echo -e "  ${COLOR_YELLOW}--- ZRAM (内存压缩, 速度快, 推荐) ---${COLOR_NC}"
-        echo "  1) 安装并配置 ZRAM"
+        echo ""
+        echo "ZRAM (内存压缩):"
+        echo "  1) 配置 ZRAM"
         echo "  2) 移除 ZRAM"
-        echo -e "  ${COLOR_YELLOW}--- Swap 文件 (基于硬盘, 速度慢) ---${COLOR_NC}"
-        echo "  3) 添加 Swap 文件"
+        echo ""
+        echo "Swap 文件 (硬盘):"
+        echo "  3) 创建 Swap 文件"
         echo "  4) 移除 Swap 文件"
-        echo "  ------------------------------------------------"
-        echo "  5) 退出脚本"
-        read -p "请输入选项 [1-5]: " choice
+        echo ""
+        echo "  0) 退出"
+        echo "========================================"
+        read -p "请选择 [0-4]: " -r choice
 
         case "$choice" in
             1) configure_zram ;;
             2) remove_zram ;;
             3) create_swap_file ;;
             4) remove_swap_file ;;
-            5) msg "BLUE" "感谢使用，脚本已退出。"; exit 0 ;;
-            *) msg "RED" "无效的选项 '$choice'，请重新输入。" ;;
+            0) log_info "退出脚本"; exit 0 ;;
+            *) log_error "无效选项: $choice" ;;
         esac
         echo ""
         read -n 1 -s -r -p "按任意键返回主菜单..."

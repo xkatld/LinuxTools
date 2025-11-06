@@ -5,14 +5,12 @@ set -euo pipefail
 readonly GITHUB_RAW_URL="https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell"
 
 declare -A SCRIPTS=(
-    ["1"]="LXD安装与镜像管理;${GITHUB_RAW_URL}/lxd-helper.sh"
-    ["2"]="虚拟内存综合管理;${GITHUB_RAW_URL}/virtual-memory-manager.sh"
-    ["3"]="linuxmirrors综合脚本;${GITHUB_RAW_URL}/linuxmirrors.sh"
-    ["4"]="SSH综合管理;${GITHUB_RAW_URL}/ssh-manager.sh"
-    ["5"]="系统优化综合脚本;${GITHUB_RAW_URL}/SysOptimize.sh"
-    ["6"]="PVE安装与镜像管理;${GITHUB_RAW_URL}/install-pve.sh"
-    ["7"]="Linux系统升级脚本;${GITHUB_RAW_URL}/apt-update.sh"
-    ["8"]="硬盘分区管理;${GITHUB_RAW_URL}/disk-manager.sh"
+    ["1"]="虚拟内存综合管理;${GITHUB_RAW_URL}/virtual-memory-manager.sh"
+    ["2"]="linuxmirrors综合脚本;${GITHUB_RAW_URL}/linuxmirrors.sh"
+    ["3"]="SSH综合管理;${GITHUB_RAW_URL}/ssh-manager.sh"
+    ["4"]="PVE安装与镜像管理;${GITHUB_RAW_URL}/install-pve.sh"
+    ["5"]="Linux系统升级脚本;${GITHUB_RAW_URL}/apt-update.sh"
+    ["6"]="硬盘分区管理;${GITHUB_RAW_URL}/disk-manager.sh"
 )
 
 msg_info() { echo "[INFO] $1"; }
