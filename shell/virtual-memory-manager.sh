@@ -213,8 +213,11 @@ configure_zram() {
     esac
     log_info "已选择压缩算法: ${zram_algo}"
 
-    log_info "写入配置..."
-    echo -e "ALGO=${zram_algo}\nSIZE=${zram_size}M" > "$config_file"
+    local zram_percent=$((zram_size * 100 / physical_mem))
+    [[ $zram_percent -lt 1 ]] && zram_percent=1
+    
+    log_info "写入配置 (PERCENT=${zram_percent}%)..."
+    echo -e "ALGO=${zram_algo}\nPERCENT=${zram_percent}" > "$config_file"
 
     log_info "重启服务..."
     if systemctl restart "$service_name"; then
