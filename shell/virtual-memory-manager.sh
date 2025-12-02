@@ -213,20 +213,41 @@ configure_zram() {
     esac
     log_info "已选择压缩算法: ${zram_algo}"
 
-    local zram_percent=$((zram_size * 100 / physical_mem))
-    [[ $zram_percent -lt 1 ]] && zram_percent=1
+    log_info "清理现有 ZRAM..."
+    systemctl stop "$service_name" 2>/dev/null || true
+    systemctl disable "$service_name" 2>/dev/null || true
+    for zdev in /dev/zram*; do
+        if [[ -b "$zdev" ]]; then
+            swapoff "$zdev" 2>/dev/null || true
+            zramctl --reset "$zdev" 2>/dev/null || true
+        fi
+    done
+    rmmod zram 2>/dev/null || true
+    sleep 1
     
-    log_info "写入配置 (PERCENT=${zram_percent}%)..."
-    echo -e "ALGO=${zram_algo}\nPERCENT=${zram_percent}" > "$config_file"
-
-    log_info "重启服务..."
-    if systemctl restart "$service_name"; then
-        log_ok "ZRAM 已配置并启用"
-        apply_aggressive_swap_settings
-    else
-        log_error "服务启动失败"
+    log_info "创建 ${zram_size}MB ZRAM..."
+    modprobe zram num_devices=1
+    local zram_dev
+    zram_dev=$(zramctl --find --size "${zram_size}M" --algorithm "${zram_algo}")
+    
+    if [[ -z "$zram_dev" ]]; then
+        log_error "ZRAM 设备创建失败"
         return 1
     fi
+    
+    mkswap "$zram_dev"
+    swapon -p 32767 "$zram_dev"
+    
+    log_info "写入开机配置..."
+    cat > "$config_file" << EOF
+ALGO=${zram_algo}
+PERCENT=$((zram_size * 100 / physical_mem))
+PRIORITY=32767
+EOF
+    systemctl enable "$service_name" 2>/dev/null || true
+
+    log_ok "ZRAM 已配置: ${zram_dev} (${zram_size}MB, ${zram_algo}, 优先级32767)"
+    apply_aggressive_swap_settings
 }
 
 remove_zram() {
