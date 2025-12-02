@@ -110,9 +110,9 @@ initialize_ssh_env() {
     fi
 
     if command_exists systemctl; then
-        if systemctl list-unit-files | grep -q "^sshd.service"; then
+        if systemctl list-unit-files | grep -q "sshd.service"; then
             SSH_SERVICE_NAME="sshd"
-        elif systemctl list-unit-files | grep -q "^ssh.service"; then
+        elif systemctl list-unit-files | grep -q "ssh.service"; then
             SSH_SERVICE_NAME="ssh"
         else
             log_error "未找到 SSH 服务"

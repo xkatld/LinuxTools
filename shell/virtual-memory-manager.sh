@@ -9,6 +9,92 @@ log_ok() { echo "[OK] $1"; }
 log_error() { echo "[ERROR] $1" >&2; }
 log_warn() { echo "[WARN] $1"; }
 
+show_memory_info() {
+    local mem_total mem_used mem_available usage_percent
+    mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    mem_used=$(free -m | awk '/^Mem:/{print $3}')
+    mem_available=$(free -m | awk '/^Mem:/{print $NF}')
+    
+    mem_total=${mem_total:-1}
+    mem_used=${mem_used:-0}
+    mem_available=${mem_available:-0}
+    usage_percent=$((mem_used * 100 / mem_total))
+    
+    echo "当前内存状态:"
+    echo "  总量: ${mem_total}MB | 已用: ${mem_used}MB (${usage_percent}%) | 可用: ${mem_available}MB"
+}
+
+calculate_zram_recommendation() {
+    local mem_mb=$1
+    local recommended
+    
+    if [[ $mem_mb -le 1024 ]]; then
+        recommended=$((mem_mb * 2))
+        echo "$recommended|≤1GB 内存，推荐 200% (压缩比约2-4:1，实际占用较小)"
+    elif [[ $mem_mb -le 4096 ]]; then
+        recommended=$((mem_mb * 3 / 2))
+        echo "$recommended|1-4GB 内存，推荐 150% (有效扩展可用内存)"
+    elif [[ $mem_mb -le 16384 ]]; then
+        recommended=$mem_mb
+        echo "$recommended|4-16GB 内存，推荐 100% (平衡性能与扩展)"
+    else
+        recommended=$((mem_mb / 2))
+        [[ $recommended -gt 16384 ]] && recommended=16384
+        echo "$recommended|>16GB 内存，推荐 50% (最大16GB)"
+    fi
+}
+
+calculate_swap_recommendation() {
+    local mem_mb=$1
+    local disk_available_mb=$2
+    local recommended reason
+    
+    if [[ $mem_mb -le 2048 ]]; then
+        recommended=$((mem_mb * 2))
+        reason="≤2GB 内存，推荐 2x 内存"
+    elif [[ $mem_mb -le 8192 ]]; then
+        recommended=$mem_mb
+        reason="2-8GB 内存，推荐 1x 内存"
+    else
+        recommended=4096
+        reason=">8GB 内存，推荐固定 4GB"
+    fi
+    
+    if [[ "$disk_available_mb" =~ ^[0-9]+$ ]] && [[ $disk_available_mb -gt 0 ]]; then
+        local max_swap=$((disk_available_mb / 2))
+        if [[ $recommended -gt $max_swap ]]; then
+            recommended=$max_swap
+            reason="${reason} (受磁盘空间限制: ${max_swap}MB)"
+        fi
+    fi
+    
+    echo "$recommended|$reason"
+}
+
+apply_aggressive_swap_settings() {
+    local sysctl_file="/etc/sysctl.d/99-swap-tuning.conf"
+    
+    log_info "应用最激进虚拟内存策略..."
+    
+    cat > "$sysctl_file" << 'EOF'
+vm.swappiness = 200
+vm.vfs_cache_pressure = 500
+vm.page-cluster = 0
+EOF
+    
+    sysctl -p "$sysctl_file" >/dev/null 2>&1
+    log_ok "内核参数已优化: swappiness=200, vfs_cache_pressure=500, page-cluster=0"
+}
+
+remove_swap_settings() {
+    local sysctl_file="/etc/sysctl.d/99-swap-tuning.conf"
+    if [[ -f "$sysctl_file" ]]; then
+        rm -f "$sysctl_file"
+        sysctl --system >/dev/null 2>&1
+        log_info "已清理内核参数配置"
+    fi
+}
+
 initial_checks() {
     if [[ "${EUID}" -ne 0 ]]; then
         log_error "需要 root 权限"
@@ -72,6 +158,7 @@ configure_zram() {
 
     log_info "安装 zram-tools..."
     DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null && apt-get install -y zram-tools
+    systemctl daemon-reload
 
     local zram_details
     zram_details=$(detect_zram_service)
@@ -86,11 +173,23 @@ configure_zram() {
 
     local physical_mem
     physical_mem=$(free -m | awk '/^Mem:/{print $2}')
-    local default_zram=$((physical_mem / 2))
+    
+    echo ""
+    show_memory_info
+    echo ""
+    
+    local recommendation
+    recommendation=$(calculate_zram_recommendation "$physical_mem")
+    local default_zram="${recommendation%%|*}"
+    local recommend_reason="${recommendation#*|}"
+    
+    log_info "科学推荐: ${default_zram}MB"
+    log_info "理由: ${recommend_reason}"
+    echo ""
 
     local zram_size
     while true; do
-        read -p "ZRAM 大小 (MB) [默认: ${default_zram}]: " -r zram_size
+        read -p "ZRAM 大小 (MB) [推荐: ${default_zram}]: " -r zram_size
         zram_size=${zram_size:-$default_zram}
         if [[ "$zram_size" =~ ^[1-9][0-9]*$ ]]; then
             break
@@ -99,12 +198,28 @@ configure_zram() {
         fi
     done
 
+    echo ""
+    echo "压缩算法:"
+    echo "  1) zstd (推荐，压缩比高)"
+    echo "  2) lz4  (速度最快，CPU开销小)"
+    echo "  3) lzo  (传统默认，兼容性好)"
+    local algo_choice zram_algo
+    read -p "选择 [默认: 1]: " -r algo_choice
+    algo_choice=${algo_choice:-1}
+    case "$algo_choice" in
+        2) zram_algo="lz4" ;;
+        3) zram_algo="lzo" ;;
+        *) zram_algo="zstd" ;;
+    esac
+    log_info "已选择压缩算法: ${zram_algo}"
+
     log_info "写入配置..."
-    echo -e "ALGO=zstd\nSIZE=${zram_size}" > "$config_file"
+    echo -e "ALGO=${zram_algo}\nSIZE=${zram_size}M" > "$config_file"
 
     log_info "重启服务..."
     if systemctl restart "$service_name"; then
         log_ok "ZRAM 已配置并启用"
+        apply_aggressive_swap_settings
     else
         log_error "服务启动失败"
         return 1
@@ -146,6 +261,7 @@ remove_zram() {
         apt-get purge -y zram-tools >/dev/null
     fi
     
+    remove_swap_settings
     log_ok "ZRAM 已移除"
 }
 
@@ -154,18 +270,36 @@ create_swap_file() {
     echo "=> 创建 Swap 文件"
     echo ""
     
-    if grep -q "${SWAP_FILE_PATH}" /etc/fstab; then
+    if [[ -f "${SWAP_FILE_PATH}" ]] || grep -q "${SWAP_FILE_PATH}" /etc/fstab; then
         log_error "Swap 文件已存在"
         return 1
     fi
 
     local physical_mem
     physical_mem=$(free -m | awk '/^Mem:/{print $2}')
-    local default_swap=$((physical_mem * 2))
+    
+    local swap_dir
+    swap_dir=$(dirname "${SWAP_FILE_PATH}")
+    local disk_available_mb
+    disk_available_mb=$(df -m "$swap_dir" 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+    
+    echo ""
+    show_memory_info
+    log_info "磁盘可用空间: ${disk_available_mb}MB (${swap_dir})"
+    echo ""
+    
+    local recommendation
+    recommendation=$(calculate_swap_recommendation "$physical_mem" "$disk_available_mb")
+    local default_swap="${recommendation%%|*}"
+    local recommend_reason="${recommendation#*|}"
+    
+    log_info "科学推荐: ${default_swap}MB"
+    log_info "理由: ${recommend_reason}"
+    echo ""
 
     local swap_size
     while true; do
-        read -p "Swap 大小 (MB) [默认: ${default_swap}]: " -r swap_size
+        read -p "Swap 大小 (MB) [推荐: ${default_swap}]: " -r swap_size
         swap_size=${swap_size:-$default_swap}
         if [[ "$swap_size" =~ ^[1-9][0-9]*$ ]]; then
             break
@@ -175,7 +309,10 @@ create_swap_file() {
     done
 
     log_info "创建 ${swap_size}MB Swap 文件..."
-    fallocate -l "${swap_size}M" "${SWAP_FILE_PATH}"
+    if ! fallocate -l "${swap_size}M" "${SWAP_FILE_PATH}" 2>/dev/null; then
+        log_warn "fallocate 失败，使用 dd 创建..."
+        dd if=/dev/zero of="${SWAP_FILE_PATH}" bs=1M count="${swap_size}" status=progress
+    fi
     chmod 600 "${SWAP_FILE_PATH}"
     mkswap "${SWAP_FILE_PATH}"
     swapon "${SWAP_FILE_PATH}"
@@ -184,6 +321,7 @@ create_swap_file() {
     echo "${SWAP_FILE_PATH} none swap sw 0 0" >> /etc/fstab
 
     log_ok "Swap 文件已创建并启用"
+    apply_aggressive_swap_settings
 }
 
 remove_swap_file() {
@@ -210,6 +348,7 @@ remove_swap_file() {
     log_info "删除文件..."
     rm -f "${SWAP_FILE_PATH}"
     
+    remove_swap_settings
     log_ok "Swap 文件已移除"
 }
 
