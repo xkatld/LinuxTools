@@ -3,412 +3,444 @@
 set -euo pipefail
 
 readonly SWAP_FILE_PATH="/swapfile"
+readonly SYSCTL_FILE="/etc/sysctl.d/99-swap-tuning.conf"
 
 log_info() { echo "[INFO] $1"; }
 log_ok() { echo "[OK] $1"; }
 log_error() { echo "[ERROR] $1" >&2; }
 log_warn() { echo "[WARN] $1"; }
 
-show_memory_info() {
-    local mem_total mem_used mem_available usage_percent
-    mem_total=$(free -m | awk '/^Mem:/{print $2}')
-    mem_used=$(free -m | awk '/^Mem:/{print $3}')
-    mem_available=$(free -m | awk '/^Mem:/{print $NF}')
-    
-    mem_total=${mem_total:-1}
-    mem_used=${mem_used:-0}
-    mem_available=${mem_available:-0}
-    usage_percent=$((mem_used * 100 / mem_total))
-    
-    echo "当前内存状态:"
-    echo "  总量: ${mem_total}MB | 已用: ${mem_used}MB (${usage_percent}%) | 可用: ${mem_available}MB"
-}
-
-calculate_zram_recommendation() {
-    local mem_mb=$1
-    local recommended
-    
-    if [[ $mem_mb -le 1024 ]]; then
-        recommended=$((mem_mb * 2))
-        echo "$recommended|≤1GB 内存，推荐 200% (压缩比约2-4:1，实际占用较小)"
-    elif [[ $mem_mb -le 4096 ]]; then
-        recommended=$((mem_mb * 3 / 2))
-        echo "$recommended|1-4GB 内存，推荐 150% (有效扩展可用内存)"
-    elif [[ $mem_mb -le 16384 ]]; then
-        recommended=$mem_mb
-        echo "$recommended|4-16GB 内存，推荐 100% (平衡性能与扩展)"
-    else
-        recommended=$((mem_mb / 2))
-        [[ $recommended -gt 16384 ]] && recommended=16384
-        echo "$recommended|>16GB 内存，推荐 50% (最大16GB)"
-    fi
-}
-
-calculate_swap_recommendation() {
-    local mem_mb=$1
-    local disk_available_mb=$2
-    local recommended reason
-    
-    if [[ $mem_mb -le 2048 ]]; then
-        recommended=$((mem_mb * 2))
-        reason="≤2GB 内存，推荐 2x 内存"
-    elif [[ $mem_mb -le 8192 ]]; then
-        recommended=$mem_mb
-        reason="2-8GB 内存，推荐 1x 内存"
-    else
-        recommended=4096
-        reason=">8GB 内存，推荐固定 4GB"
-    fi
-    
-    if [[ "$disk_available_mb" =~ ^[0-9]+$ ]] && [[ $disk_available_mb -gt 0 ]]; then
-        local max_swap=$((disk_available_mb / 2))
-        if [[ $recommended -gt $max_swap ]]; then
-            recommended=$max_swap
-            reason="${reason} (受磁盘空间限制: ${max_swap}MB)"
-        fi
-    fi
-    
-    echo "$recommended|$reason"
-}
-
-apply_aggressive_swap_settings() {
-    local sysctl_file="/etc/sysctl.d/99-swap-tuning.conf"
-    
-    log_info "应用最激进虚拟内存策略..."
-    
-    cat > "$sysctl_file" << 'EOF'
-vm.swappiness = 200
-vm.vfs_cache_pressure = 500
-vm.page-cluster = 0
-EOF
-    
-    sysctl -p "$sysctl_file" >/dev/null 2>&1
-    log_ok "内核参数已优化: swappiness=200, vfs_cache_pressure=500, page-cluster=0"
-}
-
-remove_swap_settings() {
-    local sysctl_file="/etc/sysctl.d/99-swap-tuning.conf"
-    if [[ -f "$sysctl_file" ]]; then
-        rm -f "$sysctl_file"
-        sysctl --system >/dev/null 2>&1
-        log_info "已清理内核参数配置"
-    fi
-}
-
-initial_checks() {
+check_root() {
     if [[ "${EUID}" -ne 0 ]]; then
         log_error "需要 root 权限"
         exit 1
     fi
-
-    if [[ -d "/proc/vz" ]]; then
-        log_error "不支持 OpenVZ 虚拟化环境"
-        exit 1
-    fi
-
-    local dependencies=("free" "grep" "sed" "awk" "systemctl" "dpkg" "apt-get" "modprobe")
-    for cmd in "${dependencies[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            log_error "缺少命令: $cmd"
-            exit 1
-        fi
-    done
 }
 
-show_status() {
+show_memory_status() {
     echo ""
-    echo "=> 当前虚拟内存状态"
-    echo ""
-    echo "Swap 摘要:"
-    swapon --summary 2>/dev/null || echo "  -> 无活动 Swap"
-    echo ""
-    echo "内存使用:"
+    echo "=== 内存状态 ==="
     free -h
-    echo "========================================"
+    echo ""
 }
 
-detect_zram_service() {
-    if [[ -f /lib/systemd/system/zramswap.service ]]; then
-        echo "/etc/default/zramswap zramswap.service"
-    elif [[ -f /lib/systemd/system/zram-config.service ]]; then
-        echo "/etc/default/zram-config zram-config.service"
+show_zram_status() {
+    echo "=== ZRAM 状态 ==="
+    if command -v zramctl &>/dev/null && [[ -b /dev/zram0 ]]; then
+        zramctl --output-all
     else
-        echo ""
+        echo "无 ZRAM 设备"
+    fi
+    echo ""
+}
+
+show_swap_status() {
+    echo "=== Swap 状态 ==="
+    swapon --summary 2>/dev/null || echo "无活动 Swap"
+    echo ""
+}
+
+apply_aggressive_settings() {
+    log_info "应用激进内存策略..."
+    cat > "$SYSCTL_FILE" << 'EOF'
+vm.swappiness = 200
+vm.vfs_cache_pressure = 500
+vm.page-cluster = 0
+EOF
+    sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1
+    log_ok "swappiness=200, vfs_cache_pressure=500, page-cluster=0"
+}
+
+remove_aggressive_settings() {
+    if [[ -f "$SYSCTL_FILE" ]]; then
+        rm -f "$SYSCTL_FILE"
+        sysctl --system >/dev/null 2>&1
+        log_info "已清理内核参数"
     fi
 }
 
-check_zram_support() {
-    if modprobe --dry-run zram &>/dev/null; then
-        return 0
-    else
-        log_error "内核不支持 ZRAM 模块"
-        return 1
-    fi
-}
-
-configure_zram() {
+zram_create() {
     echo ""
-    echo "=> 配置 ZRAM"
+    echo "=> 创建 ZRAM"
     echo ""
-    
-    if ! check_zram_support; then
-        log_warn "请使用 Swap 文件功能"
-        return 1
-    fi
+    show_memory_status
 
-    log_info "安装 zram-tools..."
-    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null && apt-get install -y zram-tools
-    systemctl daemon-reload
-
-    local zram_details
-    zram_details=$(detect_zram_service)
-    if [[ -z "$zram_details" ]]; then
-        log_error "未检测到 ZRAM 服务"
-        return 1
-    fi
-
-    local config_file service_name
-    read -r config_file service_name <<< "$zram_details"
-    log_info "检测到服务: $service_name"
-
-    local physical_mem
-    physical_mem=$(free -m | awk '/^Mem:/{print $2}')
-    
-    echo ""
-    show_memory_info
-    echo ""
-    
-    local recommendation
-    recommendation=$(calculate_zram_recommendation "$physical_mem")
-    local default_zram="${recommendation%%|*}"
-    local recommend_reason="${recommendation#*|}"
-    
-    log_info "科学推荐: ${default_zram}MB"
-    log_info "理由: ${recommend_reason}"
+    local mem_mb
+    mem_mb=$(free -m | awk '/^Mem:/{print $2}')
+    log_info "物理内存: ${mem_mb}MB"
     echo ""
 
     local zram_size
-    while true; do
-        read -p "ZRAM 大小 (MB) [推荐: ${default_zram}]: " -r zram_size
-        zram_size=${zram_size:-$default_zram}
-        if [[ "$zram_size" =~ ^[1-9][0-9]*$ ]]; then
-            break
-        else
-            log_error "请输入有效数字"
-        fi
-    done
+    read -p "ZRAM 大小 (MB): " -r zram_size
+    if [[ ! "$zram_size" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "无效数字"
+        return 1
+    fi
 
     echo ""
     echo "压缩算法:"
-    echo "  1) zstd (推荐，压缩比高)"
-    echo "  2) lz4  (速度最快，CPU开销小)"
-    echo "  3) lzo  (传统默认，兼容性好)"
+    echo "  1) lz4"
+    echo "  2) zstd"
+    echo "  3) lzo"
     local algo_choice zram_algo
-    read -p "选择 [默认: 1]: " -r algo_choice
-    algo_choice=${algo_choice:-1}
+    read -p "选择 [1-3]: " -r algo_choice
     case "$algo_choice" in
-        2) zram_algo="lz4" ;;
+        1) zram_algo="lz4" ;;
+        2) zram_algo="zstd" ;;
         3) zram_algo="lzo" ;;
-        *) zram_algo="zstd" ;;
+        *) zram_algo="lz4" ;;
     esac
-    log_info "已选择压缩算法: ${zram_algo}"
 
     log_info "清理现有 ZRAM..."
-    systemctl stop "$service_name" 2>/dev/null || true
-    systemctl disable "$service_name" 2>/dev/null || true
+    systemctl stop zramswap.service 2>/dev/null || true
+    systemctl disable zramswap.service 2>/dev/null || true
     for zdev in /dev/zram*; do
-        if [[ -b "$zdev" ]]; then
-            swapoff "$zdev" 2>/dev/null || true
-            zramctl --reset "$zdev" 2>/dev/null || true
-        fi
+        [[ -b "$zdev" ]] || continue
+        swapoff "$zdev" 2>/dev/null || true
+        zramctl --reset "$zdev" 2>/dev/null || true
     done
     rmmod zram 2>/dev/null || true
     sleep 1
-    
+
     log_info "创建 ${zram_size}MB ZRAM..."
     modprobe zram num_devices=1
     local zram_dev
     zram_dev=$(zramctl --find --size "${zram_size}M" --algorithm "${zram_algo}")
-    
     if [[ -z "$zram_dev" ]]; then
-        log_error "ZRAM 设备创建失败"
+        log_error "创建失败"
         return 1
     fi
-    
+
     mkswap "$zram_dev"
     swapon -p 32767 "$zram_dev"
-    
+
     log_info "写入开机配置..."
+    apt-get install -y zram-tools >/dev/null 2>&1 || true
+    systemctl daemon-reload
+    local config_file="/etc/default/zramswap"
     cat > "$config_file" << EOF
 ALGO=${zram_algo}
-PERCENT=$((zram_size * 100 / physical_mem))
+PERCENT=$((zram_size * 100 / mem_mb))
 PRIORITY=32767
 EOF
-    systemctl enable "$service_name" 2>/dev/null || true
+    systemctl enable zramswap.service 2>/dev/null || true
 
-    log_ok "ZRAM 已配置: ${zram_dev} (${zram_size}MB, ${zram_algo}, 优先级32767)"
-    apply_aggressive_swap_settings
+    apply_aggressive_settings
+    log_ok "ZRAM 已创建: ${zram_dev} ${zram_size}MB ${zram_algo}"
 }
 
-remove_zram() {
+zram_remove() {
     echo ""
-    echo "=> 移除 ZRAM"
+    echo "=> 删除 ZRAM"
     echo ""
-    
-    local zram_details
-    zram_details=$(detect_zram_service)
+    show_zram_status
 
-    if [[ -z "$zram_details" ]] && ! dpkg -s "zram-tools" &>/dev/null; then
-        log_error "未检测到 ZRAM"
-        return 1
-    fi
-
-    read -p "确认移除 ZRAM? [y/N]: " -r confirm
-    confirm=${confirm:-N}
-    if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
+    read -p "确认删除? [y/N]: " -r confirm
+    if [[ ! "${confirm:-N}" =~ ^[yY]$ ]]; then
         log_info "已取消"
         return
     fi
 
-    if [[ -n "$zram_details" ]]; then
-        local service_name
-        service_name=$(echo "$zram_details" | awk '{print $2}')
-        if systemctl is-active --quiet "$service_name"; then
-            log_info "停止服务..."
-            systemctl stop "$service_name"
-            systemctl disable "$service_name"
-        fi
-    fi
+    log_info "停止服务..."
+    systemctl stop zramswap.service 2>/dev/null || true
+    systemctl disable zramswap.service 2>/dev/null || true
 
-    if dpkg -s "zram-tools" &>/dev/null; then
-        log_info "卸载 zram-tools..."
-        apt-get purge -y zram-tools >/dev/null
-    fi
-    
-    remove_swap_settings
-    log_ok "ZRAM 已移除"
+    log_info "关闭 ZRAM swap..."
+    for zdev in /dev/zram*; do
+        [[ -b "$zdev" ]] || continue
+        swapoff "$zdev" 2>/dev/null || true
+        zramctl --reset "$zdev" 2>/dev/null || true
+    done
+
+    log_info "卸载模块..."
+    rmmod zram 2>/dev/null || true
+
+    log_info "卸载 zram-tools..."
+    apt-get purge -y zram-tools 2>/dev/null || true
+    rm -f /etc/default/zramswap
+
+    remove_aggressive_settings
+    log_ok "ZRAM 已删除"
 }
 
-create_swap_file() {
+zram_test() {
+    echo ""
+    echo "=> ZRAM 压力测试"
+    echo ""
+    show_memory_status
+    show_zram_status
+
+    local target_gb workers
+    read -p "目标内存 (GB): " -r target_gb
+    read -p "进程数: " -r workers
+
+    if [[ ! "$target_gb" =~ ^[1-9][0-9]*$ ]] || [[ ! "$workers" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "无效输入"
+        return 1
+    fi
+
+    local per_worker_mb=$(( target_gb * 1024 / workers ))
+    log_info "启动 ${workers} 个进程, 每个 ${per_worker_mb}MB"
+    echo ""
+
+    cleanup_test() {
+        pkill -f "zram-test-worker" 2>/dev/null || true
+    }
+    trap cleanup_test EXIT
+
+    for i in $(seq 1 "$workers"); do
+        log_info "启动 Worker $i/${workers}..."
+        python3 -c "
+import sys, random
+size_mb = int(sys.argv[1])
+data = bytearray(size_mb * 1024 * 1024)
+for i in range(0, len(data), 4096):
+    data[i:i+100] = bytes([random.randint(0,255) for _ in range(100)])
+print(f'Worker $i: {size_mb}MB 已分配')
+sys.stdout.flush()
+input()
+" "$per_worker_mb" &
+        sleep 2
+
+        if (( i % 2 == 0 )); then
+            echo ""
+            zramctl --output NAME,DISKSIZE,DATA,COMPR,COMP-RATIO 2>/dev/null || true
+            free -h | grep -E "Mem|Swap"
+            echo ""
+        fi
+    done
+
+    echo ""
+    log_ok "全部启动完成"
+    echo ""
+    show_memory_status
+    show_zram_status
+
+    local zram_data zram_compr
+    zram_data=$(zramctl -b 2>/dev/null | awk '/zram/{sum+=$4} END{print int(sum/1024/1024)}')
+    zram_compr=$(zramctl -b 2>/dev/null | awk '/zram/{sum+=$5} END{print int(sum/1024/1024)}')
+    zram_data=${zram_data:-0}
+    zram_compr=${zram_compr:-0}
+
+    echo "=== 测试结果 ==="
+    echo "ZRAM 数据: ${zram_data}MB"
+    echo "压缩后: ${zram_compr}MB"
+    if [[ $zram_compr -gt 0 ]]; then
+        local ratio
+        ratio=$(echo "scale=2; $zram_data / $zram_compr" | bc)
+        echo "压缩率: ${ratio}:1"
+    fi
+    echo ""
+
+    read -p "按回车结束测试..." -r
+    cleanup_test
+    trap - EXIT
+    log_ok "测试完成"
+}
+
+zram_menu() {
+    while true; do
+        clear 2>/dev/null || printf '\033[2J\033[H'
+        echo "========================================"
+        echo "  ZRAM 管理"
+        echo "========================================"
+        show_zram_status
+        echo "  1) 创建 ZRAM"
+        echo "  2) 删除 ZRAM"
+        echo "  3) 压力测试"
+        echo "  0) 返回"
+        echo "========================================"
+        read -p "选择 [0-3]: " -r choice
+
+        case "$choice" in
+            1) zram_create ;;
+            2) zram_remove ;;
+            3) zram_test ;;
+            0) return ;;
+            *) log_error "无效选项" ;;
+        esac
+        echo ""
+        read -n 1 -s -r -p "按任意键继续..."
+    done
+}
+
+swap_create() {
     echo ""
     echo "=> 创建 Swap 文件"
     echo ""
-    
-    if [[ -f "${SWAP_FILE_PATH}" ]] || grep -q "${SWAP_FILE_PATH}" /etc/fstab; then
+    show_memory_status
+
+    if [[ -f "${SWAP_FILE_PATH}" ]]; then
         log_error "Swap 文件已存在"
         return 1
     fi
 
-    local physical_mem
-    physical_mem=$(free -m | awk '/^Mem:/{print $2}')
-    
-    local swap_dir
-    swap_dir=$(dirname "${SWAP_FILE_PATH}")
-    local disk_available_mb
-    disk_available_mb=$(df -m "$swap_dir" 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
-    
-    echo ""
-    show_memory_info
-    log_info "磁盘可用空间: ${disk_available_mb}MB (${swap_dir})"
-    echo ""
-    
-    local recommendation
-    recommendation=$(calculate_swap_recommendation "$physical_mem" "$disk_available_mb")
-    local default_swap="${recommendation%%|*}"
-    local recommend_reason="${recommendation#*|}"
-    
-    log_info "科学推荐: ${default_swap}MB"
-    log_info "理由: ${recommend_reason}"
+    local disk_available
+    disk_available=$(df -m / | awk 'NR==2{print $4}')
+    log_info "磁盘可用: ${disk_available}MB"
     echo ""
 
     local swap_size
-    while true; do
-        read -p "Swap 大小 (MB) [推荐: ${default_swap}]: " -r swap_size
-        swap_size=${swap_size:-$default_swap}
-        if [[ "$swap_size" =~ ^[1-9][0-9]*$ ]]; then
-            break
-        else
-            log_error "请输入有效数字"
-        fi
-    done
-
-    log_info "创建 ${swap_size}MB Swap 文件..."
-    if ! fallocate -l "${swap_size}M" "${SWAP_FILE_PATH}" 2>/dev/null; then
-        log_warn "fallocate 失败，使用 dd 创建..."
-        dd if=/dev/zero of="${SWAP_FILE_PATH}" bs=1M count="${swap_size}" status=progress
-    fi
-    chmod 600 "${SWAP_FILE_PATH}"
-    mkswap "${SWAP_FILE_PATH}"
-    swapon "${SWAP_FILE_PATH}"
-    
-    log_info "写入 /etc/fstab..."
-    echo "${SWAP_FILE_PATH} none swap sw 0 0" >> /etc/fstab
-
-    log_ok "Swap 文件已创建并启用"
-    apply_aggressive_swap_settings
-}
-
-remove_swap_file() {
-    echo ""
-    echo "=> 移除 Swap 文件"
-    echo ""
-    
-    if ! grep -q "${SWAP_FILE_PATH}" /etc/fstab && [[ ! -f "${SWAP_FILE_PATH}" ]]; then
-        log_error "未找到 Swap 文件"
+    read -p "Swap 大小 (MB): " -r swap_size
+    if [[ ! "$swap_size" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "无效数字"
         return 1
     fi
 
-    read -p "确认删除 Swap 文件? [y/N]: " -r confirm
-    confirm=${confirm:-N}
-    if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
+    log_info "创建 ${swap_size}MB Swap..."
+    if ! fallocate -l "${swap_size}M" "${SWAP_FILE_PATH}" 2>/dev/null; then
+        log_warn "fallocate 失败, 使用 dd..."
+        dd if=/dev/zero of="${SWAP_FILE_PATH}" bs=1M count="${swap_size}" status=progress
+    fi
+
+    chmod 600 "${SWAP_FILE_PATH}"
+    mkswap "${SWAP_FILE_PATH}"
+    swapon "${SWAP_FILE_PATH}"
+
+    if ! grep -q "${SWAP_FILE_PATH}" /etc/fstab; then
+        echo "${SWAP_FILE_PATH} none swap sw 0 0" >> /etc/fstab
+    fi
+
+    apply_aggressive_settings
+    log_ok "Swap 已创建: ${SWAP_FILE_PATH} ${swap_size}MB"
+}
+
+swap_remove() {
+    echo ""
+    echo "=> 删除 Swap 文件"
+    echo ""
+    show_swap_status
+
+    if [[ ! -f "${SWAP_FILE_PATH}" ]]; then
+        log_error "Swap 文件不存在"
+        return 1
+    fi
+
+    read -p "确认删除? [y/N]: " -r confirm
+    if [[ ! "${confirm:-N}" =~ ^[yY]$ ]]; then
         log_info "已取消"
         return
     fi
 
-    log_info "禁用并移除配置..."
+    log_info "关闭 Swap..."
     swapoff "${SWAP_FILE_PATH}" 2>/dev/null || true
-    sed -i.bak "\#${SWAP_FILE_PATH}#d" /etc/fstab
 
     log_info "删除文件..."
     rm -f "${SWAP_FILE_PATH}"
-    
-    remove_swap_settings
-    log_ok "Swap 文件已移除"
+
+    log_info "清理 fstab..."
+    grep -v "${SWAP_FILE_PATH}" /etc/fstab > /etc/fstab.tmp
+    mv /etc/fstab.tmp /etc/fstab
+
+    remove_aggressive_settings
+    log_ok "Swap 已删除"
+}
+
+swap_test() {
+    echo ""
+    echo "=> Swap 压力测试"
+    echo ""
+    show_memory_status
+    show_swap_status
+
+    local target_gb workers
+    read -p "目标内存 (GB): " -r target_gb
+    read -p "进程数: " -r workers
+
+    if [[ ! "$target_gb" =~ ^[1-9][0-9]*$ ]] || [[ ! "$workers" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "无效输入"
+        return 1
+    fi
+
+    local per_worker_mb=$(( target_gb * 1024 / workers ))
+    log_info "启动 ${workers} 个进程, 每个 ${per_worker_mb}MB"
+    echo ""
+
+    cleanup_test() {
+        pkill -f "swap-test-worker" 2>/dev/null || true
+    }
+    trap cleanup_test EXIT
+
+    for i in $(seq 1 "$workers"); do
+        log_info "启动 Worker $i/${workers}..."
+        python3 -c "
+import sys, random
+size_mb = int(sys.argv[1])
+data = bytearray(size_mb * 1024 * 1024)
+for i in range(0, len(data), 4096):
+    data[i:i+100] = bytes([random.randint(0,255) for _ in range(100)])
+print(f'Worker $i: {size_mb}MB 已分配')
+sys.stdout.flush()
+input()
+" "$per_worker_mb" &
+        sleep 2
+
+        if (( i % 2 == 0 )); then
+            echo ""
+            free -h | grep -E "Mem|Swap"
+            echo ""
+        fi
+    done
+
+    echo ""
+    log_ok "全部启动完成"
+    echo ""
+    show_memory_status
+    show_swap_status
+
+    read -p "按回车结束测试..." -r
+    cleanup_test
+    trap - EXIT
+    log_ok "测试完成"
+}
+
+swap_menu() {
+    while true; do
+        clear 2>/dev/null || printf '\033[2J\033[H'
+        echo "========================================"
+        echo "  Swap 文件管理"
+        echo "========================================"
+        show_swap_status
+        echo "  1) 创建 Swap"
+        echo "  2) 删除 Swap"
+        echo "  3) 压力测试"
+        echo "  0) 返回"
+        echo "========================================"
+        read -p "选择 [0-3]: " -r choice
+
+        case "$choice" in
+            1) swap_create ;;
+            2) swap_remove ;;
+            3) swap_test ;;
+            0) return ;;
+            *) log_error "无效选项" ;;
+        esac
+        echo ""
+        read -n 1 -s -r -p "按任意键继续..."
+    done
 }
 
 main_menu() {
     while true; do
         clear 2>/dev/null || printf '\033[2J\033[H'
-        
         echo "========================================"
         echo "  虚拟内存管理"
         echo "========================================"
-        show_status
-        echo ""
-        echo "ZRAM (内存压缩):"
-        echo "  1) 配置 ZRAM"
-        echo "  2) 移除 ZRAM"
-        echo ""
-        echo "Swap 文件 (硬盘):"
-        echo "  3) 创建 Swap 文件"
-        echo "  4) 移除 Swap 文件"
-        echo ""
+        show_memory_status
+        echo "  1) ZRAM 管理"
+        echo "  2) Swap 文件管理"
         echo "  0) 退出"
         echo "========================================"
-        read -p "请选择 [0-4]: " -r choice
+        read -p "选择 [0-2]: " -r choice
 
         case "$choice" in
-            1) configure_zram ;;
-            2) remove_zram ;;
-            3) create_swap_file ;;
-            4) remove_swap_file ;;
-            0) log_info "退出脚本"; exit 0 ;;
-            *) log_error "无效选项: $choice" ;;
+            1) zram_menu ;;
+            2) swap_menu ;;
+            0) log_info "退出"; exit 0 ;;
+            *) log_error "无效选项" ;;
         esac
-        echo ""
-        read -n 1 -s -r -p "按任意键返回主菜单..."
     done
 }
 
-initial_checks
+check_root
 main_menu
