@@ -59,7 +59,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/luckxine/LinuxTools/feat/lin
 如果老大刚 push 完就要马上验证，建议优先用提交 SHA 固定地址，避免 GitHub Raw 分支缓存：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/luckxine/LinuxTools/09a6a5d/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/luckxine/LinuxTools/c22fa0c/install.sh)
 ```
 
 ### 单文件自举自测
