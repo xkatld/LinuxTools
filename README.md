@@ -1,12 +1,142 @@
-# linuxtools
-自用linux小工具脚本
-### 命令
-~~~
-bash <(curl -s https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/linuxtools.sh)
-~~~
-~~~
-wget -qO- https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/linuxtools.sh | bash
-~~~
-### 项目截图
+# Linux Toolbox
 
-![image](https://github.com/user-attachments/assets/09214f76-8575-43b4-9c86-1c0a3cf63f60)
+一个面向 Linux 服务器的 Bash 工具箱，当前第一版先聚焦这 5 组高频功能：
+
+1. 系统基础管理
+2. SSH 与安全管理
+3. 网络诊断与优化
+4. Docker 与服务环境
+5. 换源
+
+## 当前状态
+
+本仓库已经从“远程下载子脚本再执行”的旧模式，切到“本地模块化执行”的新模式。
+
+当前主入口：
+- `install.sh`
+- `linuxtools.sh`（兼容入口，内部转发到 `install.sh`）
+
+## 目录结构
+
+```text
+linux-toolbox/
+├── install.sh
+├── linuxtools.sh
+├── lib/
+│   ├── common.sh
+│   ├── detect.sh
+│   └── ui.sh
+├── modules/
+│   ├── system.sh
+│   ├── security.sh
+│   ├── network.sh
+│   ├── docker.sh
+│   └── mirrors.sh
+├── shell/                 # 旧脚本，暂时保留作参考
+└── tests/
+    └── smoke_toolbox_v1.sh
+```
+
+## 运行方式
+
+### 本地运行
+
+```bash
+bash install.sh
+```
+
+或者：
+
+```bash
+bash linuxtools.sh
+```
+
+### 查看主菜单（不执行）
+
+```bash
+bash install.sh --menu-only
+```
+
+## 已实现菜单
+
+### 1. 系统基础管理
+- 查看系统概况
+- 同步上海时间
+- 更新系统软件包
+- 安装常用工具集
+- 修改主机名
+- 创建 sudo 用户
+
+### 2. SSH 与安全管理
+- 查看 SSH 当前配置摘要
+- 修改 SSH 端口
+- 开启/关闭 root 登录
+- 开启/关闭密码登录
+- 添加 SSH 公钥
+- 查看 SSH 登录记录
+- 安装 Fail2ban
+
+### 3. 网络诊断与优化
+- 查看网络信息摘要
+- 修改 DNS
+- 恢复上次 DNS 配置
+- 自动生成 DNS 恢复脚本
+- 查看监听端口
+- 测试指定端口连通性
+- 检查本机邮件端口
+- 查看带宽占用连接
+- 检查并启用 BBR
+
+### 4. Docker 与服务环境
+- 安装 Docker
+- 安装 Docker Compose 插件
+- 进入 Docker 换源
+- 查看容器状态
+- 查看容器日志
+- 清理 Docker 垃圾
+
+### 5. 换源
+- 分组入口：系统换源 / Docker 换源
+- 系统换源：查看当前系统源、Debian/Ubuntu 换源、恢复 Debian/Ubuntu 官方源、CentOS/Rocky/AlmaLinux 换源
+- RPM 系换源会额外处理 CRB / PowerTools，并在可用时写入 EPEL
+- 系统换源内置镜像：阿里云、清华大学、中国科大、腾讯云、华为云
+- Docker 换源内置镜像：1ms、DaoCloud、中科大、腾讯云
+- 支持自定义 Docker 镜像地址
+- 支持清空 Docker 镜像加速并查看当前 Docker 配置
+- 写入前探测系统镜像可用性
+- Docker 镜像地址会先探测 /v2/ 连通性
+
+## 验证方式
+
+### 语法检查
+
+```bash
+for f in install.sh lib/*.sh modules/*.sh tests/*.sh; do
+  bash -n "$f"
+done
+```
+
+### 冒烟测试
+
+```bash
+bash tests/smoke_toolbox_v1.sh
+```
+
+## 注意事项
+
+1. 涉及改配置、装软件、改 SSH、换源等操作时，建议使用 root 运行。
+2. 修改 SSH 端口、关闭密码登录前，先确认你有可用的密钥登录方式。
+3. 系统换源当前已覆盖 Debian / Ubuntu，以及 CentOS / Rocky / AlmaLinux 的基础 repo 写入。
+4. Docker 安装默认使用官方安装脚本 `get.docker.com`。
+5. Docker 换源会写入 `/etc/docker/daemon.json`，修改后会尝试重启 Docker。
+6. RPM 系换源当前采用新增 `linux-toolbox-*.repo` 的方式接管镜像源，便于和原 repo 分开。
+7. DNS、SSH、apt 源这类操作都属于高影响变更，建议在远程服务器上谨慎执行。
+
+## 下一步建议
+
+下一阶段可以继续补：
+- NetworkManager / resolvconf / dhclient 的 DNS 适配
+- 更细的日志与验证输出
+- AlmaLinux / Rocky / Alpine 适配
+- Docker 常见服务一键安装
+- 网络测速与路由检测

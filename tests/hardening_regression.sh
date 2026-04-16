@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/common.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/detect.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/modules/security.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/modules/network.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/modules/docker.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/modules/mirrors.sh"
+
+assert_eq() {
+    local expected="$1"
+    local actual="$2"
+    local message="$3"
+    if [[ "${expected}" != "${actual}" ]]; then
+        echo "断言失败: ${message}" >&2
+        echo "期望: ${expected}" >&2
+        echo "实际: ${actual}" >&2
+        exit 1
+    fi
+}
+
+assert_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local message="$3"
+    if [[ "${haystack}" != *"${needle}"* ]]; then
+        echo "断言失败: ${message}" >&2
+        echo "未找到: ${needle}" >&2
+        echo "实际内容: ${haystack}" >&2
+        exit 1
+    fi
+}
+
+assert_success() {
+    local message="$1"
+    shift
+    if ! "$@"; then
+        echo "断言失败: ${message}" >&2
+        exit 1
+    fi
+}
+
+assert_failure() {
+    local message="$1"
+    shift
+    if "$@"; then
+        echo "断言失败: ${message}" >&2
+        exit 1
+    fi
+}
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "${workdir}"' EXIT
+
+pause_enter() { :; }
+print_section() { :; }
+clear_screen() { :; }
+confirm_action() { return 0; }
+require_root() { return 0; }
+backup_file() { :; }
+run_cmd() { "$@"; }
+log_info() { :; }
+log_warn() { :; }
+log_error() { :; }
+log_ok() { :; }
+update_package_index() { :; }
+install_packages() { :; }
+ensure_os_detected() { :; }
+
+PATH_BACKUP="${PATH}"
+
+test_security_verify_ssh_listening_port_detects_success() {
+    local bindir="${workdir}/bin-ssh-ok"
+    mkdir -p "${bindir}"
+    cat > "${bindir}/ss" <<'EOF'
+#!/usr/bin/env bash
+echo 'LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+EOF
+    chmod +x "${bindir}/ss"
+    PATH="${bindir}:${PATH_BACKUP}"
+    assert_success "SSH 新端口监听检测应成功" security_verify_ssh_listening_port 2222
+}
+
+test_security_verify_ssh_listening_port_detects_failure() {
+    local bindir="${workdir}/bin-ssh-fail"
+    mkdir -p "${bindir}"
+    cat > "${bindir}/ss" <<'EOF'
+#!/usr/bin/env bash
+echo 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+EOF
+    chmod +x "${bindir}/ss"
+    PATH="${bindir}:${PATH_BACKUP}"
+    assert_failure "SSH 新端口监听检测应失败" security_verify_ssh_listening_port 2222
+}
+
+test_network_detect_dns_mode_for_systemd_resolved() {
+    local etc_dir="${workdir}/dns/etc"
+    mkdir -p "${etc_dir}" "${workdir}/dns/run/systemd/resolve"
+    touch "${workdir}/dns/run/systemd/resolve/stub-resolv.conf"
+    ln -sf "${workdir}/dns/run/systemd/resolve/stub-resolv.conf" "${etc_dir}/resolv.conf"
+    local mode
+    mode="$(network_detect_dns_mode "${etc_dir}/resolv.conf")"
+    assert_eq "systemd-resolved" "${mode}" "应识别 systemd-resolved 管理的 resolv.conf"
+}
+
+test_network_detect_dns_mode_for_plain_file() {
+    local plain_file="${workdir}/dns/plain-resolv.conf"
+    cat > "${plain_file}" <<'EOF'
+nameserver 223.5.5.5
+EOF
+    local mode
+    mode="$(network_detect_dns_mode "${plain_file}")"
+    assert_eq "plain" "${mode}" "普通 resolv.conf 应识别为 plain"
+}
+
+test_docker_merge_daemon_json_preserves_existing_keys() {
+    local daemon_file="${workdir}/docker-daemon.json"
+    cat > "${daemon_file}" <<'EOF'
+{"log-driver":"json-file","features":{"buildkit":true}}
+EOF
+    docker_merge_daemon_json "${daemon_file}" "https://docker.1ms.run"
+    local content
+    content="$(cat "${daemon_file}")"
+    assert_contains '"log-driver": "json-file"' "${content}" "应保留原有 log-driver 配置"
+    assert_contains '"buildkit": true' "${content}" "应保留原有 features 配置"
+    assert_contains '"registry-mirrors": [' "${content}" "应写入 registry-mirrors 数组"
+    assert_contains 'https://docker.1ms.run' "${content}" "应包含新的镜像地址"
+}
+
+test_mirrors_probe_apt_mirror_uses_release_file() {
+    local bindir="${workdir}/bin-curl"
+    mkdir -p "${bindir}"
+    cat > "${bindir}/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "${TMP_CURL_ARGS_FILE}"
+exit 0
+EOF
+    chmod +x "${bindir}/curl"
+    PATH="${bindir}:${PATH_BACKUP}"
+    export TMP_CURL_ARGS_FILE="${workdir}/curl-args.txt"
+    assert_success "镜像探测应成功" mirrors_probe_apt_mirror "https://mirrors.tuna.tsinghua.edu.cn" "ubuntu" "jammy"
+    local curl_args
+    curl_args="$(cat "${TMP_CURL_ARGS_FILE}")"
+    assert_contains '/ubuntu/dists/jammy/Release' "${curl_args}" "应探测 Release 文件地址"
+}
+
+test_network_write_restore_script_for_plain_dns() {
+    local restore_script="${workdir}/restore-dns.sh"
+    export TOOLBOX_BACKUP_LAST_FILE="${workdir}/resolv.conf.bak"
+    echo 'nameserver 8.8.8.8' > "${TOOLBOX_BACKUP_LAST_FILE}"
+    network_write_dns_restore_script plain "${restore_script}"
+    local content
+    content="$(cat "${restore_script}")"
+    assert_contains 'cp -f' "${content}" "普通 DNS 恢复脚本应复制备份文件"
+    assert_contains "${TOOLBOX_BACKUP_LAST_FILE}" "${content}" "普通 DNS 恢复脚本应引用最近备份"
+}
+
+test_mirrors_get_official_base_for_ubuntu() {
+    local base
+    base="$(mirrors_get_official_base ubuntu)"
+    assert_eq 'https://archive.ubuntu.com' "${base}" 'Ubuntu 官方源地址应正确'
+}
+
+test_mirrors_get_security_base_for_debian() {
+    local base
+    base="$(mirrors_get_security_base debian official)"
+    assert_eq 'https://security.debian.org' "${base}" 'Debian 官方安全源地址应正确'
+}
+
+test_mirrors_main_menu_includes_system_and_docker_groups() {
+    local output
+    output="$(mirrors_render_main_menu)"
+    assert_contains '系统换源' "${output}" '换源菜单应包含系统换源分组'
+    assert_contains 'Docker 换源' "${output}" '换源菜单应包含 Docker 换源分组'
+}
+
+test_docker_preset_mirror_url_for_1ms() {
+    local url
+    url="$(mirrors_get_docker_mirror_url 1)"
+    assert_eq 'https://docker.1ms.run' "${url}" 'Docker 预置镜像 1 应返回 1ms 地址'
+}
+
+test_docker_preset_mirror_url_for_ustc() {
+    local url
+    url="$(mirrors_get_docker_mirror_url 3)"
+    assert_eq 'https://docker.mirrors.ustc.edu.cn' "${url}" 'Docker 预置镜像 3 应返回中科大地址'
+}
+
+test_docker_clear_registry_mirrors_removes_key() {
+    local daemon_file="${workdir}/docker-clear.json"
+    cat > "${daemon_file}" <<'EOF'
+{"registry-mirrors":["https://docker.1ms.run"],"log-driver":"json-file"}
+EOF
+    docker_clear_registry_mirrors "${daemon_file}"
+    local content
+    content="$(cat "${daemon_file}")"
+    if [[ "${content}" == *'registry-mirrors'* ]]; then
+        echo '断言失败: 清空 Docker 镜像后不应保留 registry-mirrors 键' >&2
+        exit 1
+    fi
+    assert_contains '"log-driver": "json-file"' "${content}" '清空 Docker 镜像时应保留其他 daemon 配置'
+}
+
+test_mirrors_render_current_sources_summary_for_apt() {
+    local apt_file="${workdir}/sources.list"
+    cat > "${apt_file}" <<'EOF'
+deb https://mirrors.ustc.edu.cn/ubuntu jammy main restricted universe multiverse
+EOF
+    local output
+    output="$(mirrors_render_current_sources_summary "${apt_file}")"
+    assert_contains 'mirrors.ustc.edu.cn' "${output}" '系统源摘要应展示当前 apt 源地址'
+}
+
+test_mirrors_get_rpm_baseurl_for_rocky() {
+    local url
+    url="$(mirrors_get_rpm_baseurl rocky 9 AppStream 'https://mirrors.aliyun.com')"
+    assert_eq 'https://mirrors.aliyun.com/rockylinux/9/AppStream/$basearch/os/' "${url}" 'Rocky AppStream 地址应正确'
+}
+
+test_mirrors_get_rpm_baseurl_for_almalinux() {
+    local url
+    url="$(mirrors_get_rpm_baseurl almalinux 9 BaseOS 'https://mirrors.aliyun.com')"
+    assert_eq 'https://mirrors.aliyun.com/almalinux/9/BaseOS/$basearch/os/' "${url}" 'AlmaLinux BaseOS 地址应正确'
+}
+
+test_mirrors_get_rpm_baseurl_for_crb() {
+    local url
+    url="$(mirrors_get_rpm_baseurl rocky 9 CRB 'https://mirrors.aliyun.com')"
+    assert_eq 'https://mirrors.aliyun.com/rockylinux/9/CRB/$basearch/os/' "${url}" 'Rocky CRB 地址应正确'
+}
+
+test_mirrors_probe_docker_mirror_uses_v2_endpoint() {
+    local bindir="${workdir}/bin-docker-probe"
+    mkdir -p "${bindir}"
+    cat > "${bindir}/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "${TMP_DOCKER_CURL_ARGS_FILE}"
+exit 0
+EOF
+    chmod +x "${bindir}/curl"
+    PATH="${bindir}:${PATH_BACKUP}"
+    export TMP_DOCKER_CURL_ARGS_FILE="${workdir}/docker-curl-args.txt"
+    assert_success "Docker 镜像探测应成功" mirrors_probe_docker_mirror "https://docker.1ms.run"
+    local curl_args
+    curl_args="$(cat "${TMP_DOCKER_CURL_ARGS_FILE}")"
+    assert_contains '/v2/' "${curl_args}" 'Docker 镜像探测应使用 /v2/ 端点'
+}
+
+test_mirrors_render_current_sources_summary_formats_apt_label() {
+    local apt_file="${workdir}/summary-apt.list"
+    cat > "${apt_file}" <<'EOF'
+deb https://mirrors.ustc.edu.cn/ubuntu jammy main restricted universe multiverse
+EOF
+    local output
+    output="$(mirrors_render_current_sources_summary "${apt_file}")"
+    assert_contains '[APT]' "${output}" 'APT 源摘要应带类型标签'
+    assert_contains 'jammy' "${output}" 'APT 源摘要应展示发行版代号'
+}
+
+test_security_verify_ssh_listening_port_detects_success
+test_security_verify_ssh_listening_port_detects_failure
+test_network_detect_dns_mode_for_systemd_resolved
+test_network_detect_dns_mode_for_plain_file
+test_docker_merge_daemon_json_preserves_existing_keys
+test_mirrors_probe_apt_mirror_uses_release_file
+test_network_write_restore_script_for_plain_dns
+test_mirrors_get_official_base_for_ubuntu
+test_mirrors_get_security_base_for_debian
+test_mirrors_main_menu_includes_system_and_docker_groups
+test_docker_preset_mirror_url_for_1ms
+test_docker_preset_mirror_url_for_ustc
+test_docker_clear_registry_mirrors_removes_key
+test_mirrors_render_current_sources_summary_for_apt
+test_mirrors_get_rpm_baseurl_for_rocky
+test_mirrors_get_rpm_baseurl_for_almalinux
+test_mirrors_get_rpm_baseurl_for_crb
+test_mirrors_probe_docker_mirror_uses_v2_endpoint
+test_mirrors_render_current_sources_summary_formats_apt_label
+
+echo "hardening_regression: PASS"
