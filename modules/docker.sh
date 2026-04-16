@@ -102,6 +102,36 @@ docker_show_logs() {
     pause_enter
 }
 
+docker_show_engine_status() {
+    clear_screen
+    print_section "Docker 引擎状态"
+    if ! command -v docker >/dev/null 2>&1; then
+        log_warn "当前未检测到 docker 命令。"
+        pause_enter
+        return 1
+    fi
+
+    docker --version 2>/dev/null || true
+    docker compose version 2>/dev/null || true
+    echo
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl status docker --no-pager 2>/dev/null | sed -n '1,8p' || true
+        echo
+    fi
+
+    if [[ -f /etc/docker/daemon.json ]]; then
+        echo "daemon.json: /etc/docker/daemon.json"
+        grep -n 'registry-mirrors' /etc/docker/daemon.json 2>/dev/null || true
+    else
+        echo "daemon.json: 未找到 /etc/docker/daemon.json"
+    fi
+
+    echo
+    docker info 2>/dev/null | grep -A3 'Registry Mirrors' || true
+    pause_enter
+}
+
 docker_prune() {
     require_root || return 1
     print_section "清理 Docker 垃圾"
@@ -111,24 +141,28 @@ docker_prune() {
     pause_enter
 }
 
-module_docker_menu() {
-    while true; do
-        clear_screen
-        print_section "Docker 与服务环境"
-        cat <<'EOF'
+docker_render_menu() {
+    cat <<'EOF'
 1) 安装 Docker
 2) 安装 Docker Compose 插件
-3) 进入 Docker 换源
+3) 查看 Docker 引擎状态
 4) 查看容器状态
 5) 查看容器日志
 6) 清理 Docker 垃圾
 0) 返回上级菜单
 EOF
+}
+
+module_docker_menu() {
+    while true; do
+        clear_screen
+        print_section "Docker 与服务环境"
+        docker_render_menu
         read -r -p "请输入选项: " choice
         case "${choice}" in
             1) docker_install_engine ;;
             2) docker_install_compose ;;
-            3) docker_configure_mirror ;;
+            3) docker_show_engine_status ;;
             4) docker_show_containers ;;
             5) docker_show_logs ;;
             6) docker_prune ;;

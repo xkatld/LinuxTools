@@ -12,6 +12,12 @@
 
 本仓库已经从“远程下载子脚本再执行”的旧模式，切到“本地模块化执行”的新模式。
 
+结合同类工具箱项目（如 kejilion、NAS 油条工具箱）的常见做法，这一版明确走“实用优先”路线：
+- 保留系统信息、SSH、DNS、Docker、换源这类高频运维能力
+- 增加公网 IP、当前源摘要、Docker 镜像配置查看这类排障常用入口
+- 不把低频、易失控或偏杂项的功能先塞进来，比如游戏、面板大杂烩、压力测试、安全工具集合
+- Docker 换源统一收口到“换源”分组，避免在多个菜单重复维护同一套逻辑
+
 当前主入口：
 - `install.sh`
 - `linuxtools.sh`（兼容入口，内部转发到 `install.sh`）
@@ -34,6 +40,7 @@ linux-toolbox/
 │   └── mirrors.sh
 ├── shell/                 # 旧脚本，暂时保留作参考
 └── tests/
+    ├── bootstrap_selftest.sh
     └── smoke_toolbox_v1.sh
 ```
 
@@ -45,6 +52,28 @@ linux-toolbox/
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/luckxine/LinuxTools/feat/linux-toolbox-v1/install.sh)
+```
+
+### 单文件自举自测
+
+如果老大想验证“只有一个 install.sh 时，能不能自动拉起完整工具箱”，直接跑：
+
+```bash
+bash tests/bootstrap_selftest.sh
+```
+
+这条测试会做 3 件事：
+- 只复制一份 `install.sh` 到临时目录
+- 本地打包当前仓库 tar.gz 作为自举源
+- 用 `TOOLBOX_BOOTSTRAP_ARCHIVE_URL=file://...` 模拟远程单文件入口，再检查主菜单是否正常出现
+
+如果想手工看输出，也可以直接执行：
+
+```bash
+tmpdir="$(mktemp -d)" && \
+cp install.sh "$tmpdir/install.sh" && \
+tar -czf "$tmpdir/toolbox.tar.gz" -C .. linux-toolbox && \
+TOOLBOX_BOOTSTRAP_ARCHIVE_URL="file://$tmpdir/toolbox.tar.gz" bash "$tmpdir/install.sh" --menu-only
 ```
 
 ### 本地运行
@@ -86,23 +115,23 @@ bash install.sh --menu-only
 
 ### 3. 网络诊断与优化
 - 查看网络信息摘要
+- 查看公网 IP
 - 修改 DNS
 - 支持 plain / systemd-resolved / resolvconf / NetworkManager 四种常见 DNS 接管方式
 - 恢复上次 DNS 配置
 - 自动生成 DNS 恢复脚本
+- 修改后直接提示当前 DNS 接管模式和恢复命令
 - 查看监听端口
 - 测试指定端口连通性
-- 检查本机邮件端口
-- 查看带宽占用连接
-- 检查并启用 BBR
 
 ### 4. Docker 与服务环境
 - 安装 Docker
 - 安装 Docker Compose 插件
-- 进入 Docker 换源
+- 查看 Docker 引擎状态
 - 查看容器状态
 - 查看容器日志
 - 清理 Docker 垃圾
+- Docker 换源统一收口到“换源 -> Docker 换源”，避免重复菜单入口
 
 ### 5. 换源
 - 分组入口：系统换源 / Docker 换源
@@ -129,6 +158,12 @@ done
 
 ```bash
 bash tests/smoke_toolbox_v1.sh
+```
+
+### 单文件自举测试
+
+```bash
+bash tests/bootstrap_selftest.sh
 ```
 
 ### 高风险回归测试

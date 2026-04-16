@@ -337,10 +337,12 @@ mirrors_format_rpm_sources() {
 
 mirrors_render_current_sources_summary() {
     local target="${1:-}"
+    local found=0
     if [[ -n "${target}" ]]; then
         if [[ -d "${target}" ]]; then
             while IFS= read -r file; do
                 mirrors_format_rpm_sources "${file}"
+                found=1
             done < <(find "${target}" -maxdepth 1 -type f 2>/dev/null | sort)
         elif [[ -f "${target}" ]]; then
             if grep -qE '^(deb|URIs:)' "${target}" 2>/dev/null; then
@@ -348,7 +350,9 @@ mirrors_render_current_sources_summary() {
             else
                 mirrors_format_rpm_sources "${target}"
             fi
+            found=1
         fi
+        [[ "${found}" -eq 1 ]] || echo "未检测到可展示的软件源配置。"
         return 0
     fi
 
@@ -357,20 +361,27 @@ mirrors_render_current_sources_summary() {
         ubuntu|debian)
             if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
                 mirrors_format_apt_sources /etc/apt/sources.list.d/ubuntu.sources
+                found=1
             elif [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
                 mirrors_format_apt_sources /etc/apt/sources.list.d/debian.sources
+                found=1
             fi
             mirrors_format_apt_sources /etc/apt/sources.list
+            [[ -s /etc/apt/sources.list ]] && found=1
             ;;
         centos|rocky|almalinux|rhel|fedora)
             while IFS= read -r file; do
                 mirrors_format_rpm_sources "${file}"
+                found=1
             done < <(find /etc/yum.repos.d -maxdepth 1 -type f 2>/dev/null | sort)
             ;;
         *)
             echo "暂不支持当前系统的源摘要显示。"
+            found=1
             ;;
     esac
+
+    [[ "${found}" -eq 1 ]] || echo "未检测到可展示的软件源配置。"
 }
 
 mirrors_show_current_system_sources() {

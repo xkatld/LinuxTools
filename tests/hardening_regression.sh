@@ -9,6 +9,8 @@ source "${ROOT_DIR}/lib/detect.sh"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/modules/security.sh"
 # shellcheck disable=SC1091
+source "${ROOT_DIR}/modules/system.sh"
+# shellcheck disable=SC1091
 source "${ROOT_DIR}/modules/network.sh"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/modules/docker.sh"
@@ -34,6 +36,18 @@ assert_contains() {
     if [[ "${haystack}" != *"${needle}"* ]]; then
         echo "断言失败: ${message}" >&2
         echo "未找到: ${needle}" >&2
+        echo "实际内容: ${haystack}" >&2
+        exit 1
+    fi
+}
+
+assert_not_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local message="$3"
+    if [[ "${haystack}" == *"${needle}"* ]]; then
+        echo "断言失败: ${message}" >&2
+        echo "不应包含: ${needle}" >&2
         echo "实际内容: ${haystack}" >&2
         exit 1
     fi
@@ -332,6 +346,93 @@ EOF
     assert_contains 'jammy' "${output}" 'APT 源摘要应展示发行版代号'
 }
 
+test_network_render_menu_keeps_core_items_only() {
+    local output
+    output="$(network_render_menu)"
+    assert_contains '查看公网 IP' "${output}" '网络菜单应提供公网 IP 查询'
+    assert_contains '修改 DNS' "${output}" '网络菜单应保留 DNS 修改'
+    assert_not_contains '检查本机邮件端口' "${output}" '网络菜单应移除邮件端口专项检查'
+    assert_not_contains '查看带宽占用连接' "${output}" '网络菜单应移除带宽连接专项项'
+    assert_not_contains '检查并启用 BBR' "${output}" '网络菜单应移除 BBR 调优项'
+}
+
+test_docker_render_menu_focuses_on_runtime_tasks() {
+    local output
+    output="$(docker_render_menu)"
+    assert_not_contains '进入 Docker 换源' "${output}" 'Docker 菜单不应再内嵌换源入口'
+    assert_contains '查看容器状态' "${output}" 'Docker 菜单应保留容器查看能力'
+}
+
+test_system_render_menu_keeps_time_sync() {
+    local output
+    output="$(system_render_menu)"
+    assert_contains '同步上海时间' "${output}" '系统菜单应保留上海时区同步功能'
+}
+
+test_security_render_menu_keeps_core_hardening_items() {
+    local output
+    output="$(security_render_menu)"
+    assert_contains '修改 SSH 端口' "${output}" '安全菜单应保留 SSH 端口修改'
+    assert_contains '安装 Fail2ban' "${output}" '安全菜单应保留 Fail2ban 安装'
+}
+
+test_mirrors_render_main_menu_stays_grouped() {
+    local output
+    output="$(mirrors_render_main_menu)"
+    assert_contains '系统换源' "${output}" '换源菜单应包含系统换源'
+    assert_contains 'Docker 换源' "${output}" '换源菜单应包含 Docker 换源'
+}
+
+test_network_show_public_ip_supports_custom_service_list() {
+    local bindir="${workdir}/bin-public-ip"
+    local log_file="${workdir}/public-ip-curl.log"
+    mkdir -p "${bindir}"
+    cat > "${bindir}/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TMP_PUBLIC_IP_CURL_LOG}"
+case "$*" in
+  *"https://service-a.example/ip"*)
+    exit 1
+    ;;
+  *"https://service-b.example/ip"*)
+    printf '%s\n' '203.0.113.9'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+    chmod +x "${bindir}/curl"
+    PATH="${bindir}:${PATH_BACKUP}"
+    export TMP_PUBLIC_IP_CURL_LOG="${log_file}"
+    local result
+    result="$(NETWORK_PUBLIC_IP_SERVICES='https://service-a.example/ip https://service-b.example/ip' network_fetch_public_ip)"
+    assert_eq '203.0.113.9' "${result}" '公网 IP 查询应在后备服务成功时返回结果'
+    local curl_log
+    curl_log="$(cat "${log_file}")"
+    assert_contains 'https://service-a.example/ip' "${curl_log}" '公网 IP 查询应按顺序尝试第一个服务'
+    assert_contains 'https://service-b.example/ip' "${curl_log}" '公网 IP 查询应回退到第二个服务'
+}
+
+test_network_print_dns_restore_guidance_is_explicit() {
+    local output
+    output="$(network_print_dns_restore_guidance systemd-resolved /tmp/linux-toolbox-restore-dns.sh)"
+    assert_contains 'DNS 配置模式: systemd-resolved' "${output}" 'DNS 提示应显示当前接管模式'
+    assert_contains '恢复命令: bash /tmp/linux-toolbox-restore-dns.sh' "${output}" 'DNS 提示应直接给出恢复命令'
+    assert_contains 'drop-in 配置' "${output}" 'DNS 提示应说明 systemd-resolved 的回退动作'
+}
+
+test_docker_render_menu_includes_engine_status() {
+    local output
+    output="$(docker_render_menu)"
+    assert_contains '查看 Docker 引擎状态' "${output}" 'Docker 菜单应提供引擎状态入口'
+}
+
+test_mirrors_render_current_sources_summary_handles_missing_target() {
+    local output
+    output="$(mirrors_render_current_sources_summary "${workdir}/missing-sources")"
+    assert_contains '未检测到可展示的软件源配置。' "${output}" '系统源摘要在没有可读文件时应给出明确提示'
+}
+
 test_security_verify_ssh_listening_port_detects_success
 test_security_verify_ssh_listening_port_detects_failure
 test_network_detect_dns_mode_for_systemd_resolved
@@ -355,5 +456,14 @@ test_mirrors_get_rpm_baseurl_for_almalinux
 test_mirrors_get_rpm_baseurl_for_crb
 test_mirrors_probe_docker_mirror_uses_v2_endpoint
 test_mirrors_render_current_sources_summary_formats_apt_label
-
-echo "hardening_regression: PASS"
+ test_network_render_menu_keeps_core_items_only
+ test_docker_render_menu_focuses_on_runtime_tasks
+ test_system_render_menu_keeps_time_sync
+ test_security_render_menu_keeps_core_hardening_items
+ test_mirrors_render_main_menu_stays_grouped
+ test_network_show_public_ip_supports_custom_service_list
+ test_network_print_dns_restore_guidance_is_explicit
+ test_docker_render_menu_includes_engine_status
+ test_mirrors_render_current_sources_summary_handles_missing_target
+ 
+ echo "hardening_regression: PASS"

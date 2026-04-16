@@ -103,11 +103,8 @@ system_create_sudo_user() {
     pause_enter
 }
 
-module_system_menu() {
-    while true; do
-        clear_screen
-        print_section "系统基础管理"
-        cat <<'EOF'
+system_render_menu() {
+    cat <<'EOF'
 1) 查看系统概况
 2) 同步上海时间
 3) 更新系统软件包
@@ -116,6 +113,13 @@ module_system_menu() {
 6) 创建 sudo 用户
 0) 返回上级菜单
 EOF
+}
+
+module_system_menu() {
+    while true; do
+        clear_screen
+        print_section "系统基础管理"
+        system_render_menu
         read -r -p "请输入选项: " choice
         case "${choice}" in
             1) system_show_info ;;

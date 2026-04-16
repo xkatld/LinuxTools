@@ -199,11 +199,8 @@ security_install_fail2ban() {
     pause_enter
 }
 
-module_security_menu() {
-    while true; do
-        clear_screen
-        print_section "SSH 与安全管理"
-        cat <<'EOF'
+security_render_menu() {
+    cat <<'EOF'
 1) 查看 SSH 当前配置摘要
 2) 修改 SSH 端口
 3) 开启/关闭 root 登录
@@ -213,6 +210,13 @@ module_security_menu() {
 7) 安装 Fail2ban
 0) 返回上级菜单
 EOF
+}
+
+module_security_menu() {
+    while true; do
+        clear_screen
+        print_section "SSH 与安全管理"
+        security_render_menu
         read -r -p "请输入选项: " choice
         case "${choice}" in
             1) security_show_summary ;;

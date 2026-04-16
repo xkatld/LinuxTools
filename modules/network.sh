@@ -188,6 +188,27 @@ EOF
     log_ok "已生成 DNS 恢复脚本：${output_path}"
 }
 
+network_print_dns_restore_guidance() {
+    local dns_mode="$1"
+    local restore_script="$2"
+    echo "DNS 配置模式: ${dns_mode}"
+    echo "恢复命令: bash ${restore_script}"
+    case "${dns_mode}" in
+        systemd-resolved)
+            echo "说明: 当前是 systemd-resolved 接管，回退会删除 linux-toolbox 写入的 drop-in 配置。"
+            ;;
+        networkmanager)
+            echo "说明: 当前是 NetworkManager 接管，回退会把最近改过的活动连接切回自动 DNS。"
+            ;;
+        resolvconf)
+            echo "说明: 当前是 resolvconf 接管，回退会恢复 head 文件并重新生成 resolv.conf。"
+            ;;
+        *)
+            echo "说明: 当前是普通 resolv.conf 模式，回退会直接恢复最近一次备份。"
+            ;;
+    esac
+}
+
 network_restore_dns() {
     require_root || return 1
     local dns_mode
@@ -281,8 +302,7 @@ network_change_dns() {
     esac
     network_write_dns_restore_script "${dns_mode}" "${restore_script}" || true
     getent hosts github.com >/dev/null 2>&1 && log_ok "DNS 修改完成，解析验证通过。" || log_warn "DNS 已修改，但解析验证未通过。"
-    log_info "DNS 配置模式: ${dns_mode}"
-    log_info "如需回退，可执行：bash ${restore_script}"
+    network_print_dns_restore_guidance "${dns_mode}" "${restore_script}"
     pause_enter
 }
 
@@ -308,67 +328,67 @@ network_test_port() {
     pause_enter
 }
 
-network_check_mail_ports() {
-    clear_screen
-    print_section "检查本机邮件端口"
-    for port in 25 465 587; do
-        if ss -tln 2>/dev/null | grep -q ":${port} "; then
-            echo "端口 ${port}: 已监听"
+network_fetch_public_ip() {
+    local services service result
+    services="${NETWORK_PUBLIC_IP_SERVICES:-https://api.ipify.org https://ipv4.icanhazip.com https://ifconfig.me/ip}"
+
+    for service in ${services}; do
+        if command -v curl >/dev/null 2>&1; then
+            result="$(curl -fsSL --max-time 5 "${service}" 2>/dev/null | tr -d '\r' | head -n 1 | xargs 2>/dev/null || true)"
+        elif command -v wget >/dev/null 2>&1; then
+            result="$(wget -qO- --timeout=5 "${service}" 2>/dev/null | tr -d '\r' | head -n 1 | xargs 2>/dev/null || true)"
         else
-            echo "端口 ${port}: 未监听"
+            log_error "缺少 curl 或 wget，无法查询公网 IP。"
+            return 1
+        fi
+
+        if [[ "${result}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            printf '%s\n' "${result}"
+            return 0
         fi
     done
-    pause_enter
+
+    return 1
 }
 
-network_show_bandwidth_connections() {
+network_show_public_ip() {
     clear_screen
-    print_section "带宽占用连接（近似）"
-    ss -tpn state established 2>/dev/null | head -n 30 || true
+    print_section "公网 IP 与出口信息"
+    local public_ip
+    if public_ip="$(network_fetch_public_ip)"; then
+        echo "公网 IPv4: ${public_ip}"
+        log_ok "公网 IP 查询完成。"
+    else
+        log_warn "未能查询到公网 IPv4，请检查当前机器是否可访问外网。"
+    fi
     pause_enter
 }
 
-network_enable_bbr() {
-    require_root || return 1
-    print_section "检查并启用 BBR"
-    if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q 'bbr'; then
-        log_ok "BBR 已启用。"
-        pause_enter
-        return 0
-    fi
-    backup_file /etc/sysctl.conf
-    grep -q 'net.core.default_qdisc=fq' /etc/sysctl.conf 2>/dev/null || echo 'net.core.default_qdisc=fq' >> /etc/sysctl.conf
-    grep -q 'net.ipv4.tcp_congestion_control=bbr' /etc/sysctl.conf 2>/dev/null || echo 'net.ipv4.tcp_congestion_control=bbr' >> /etc/sysctl.conf
-    run_cmd sysctl -p
-    sysctl net.ipv4.tcp_congestion_control | tee /dev/stderr | grep -q 'bbr' && log_ok "BBR 已启用。" || log_warn "已写入配置，请确认内核是否支持 BBR。"
-    pause_enter
+network_render_menu() {
+    cat <<'EOF'
+1) 查看网络信息摘要
+2) 查看公网 IP
+3) 修改 DNS
+4) 恢复上次 DNS 配置
+5) 查看监听端口
+6) 测试指定端口连通性
+0) 返回上级菜单
+EOF
 }
 
 module_network_menu() {
     while true; do
         clear_screen
         print_section "网络诊断与优化"
-        cat <<'EOF'
-1) 查看网络信息摘要
-2) 修改 DNS
-3) 恢复上次 DNS 配置
-4) 查看监听端口
-5) 测试指定端口连通性
-6) 检查本机邮件端口
-7) 查看带宽占用连接
-8) 检查并启用 BBR
-0) 返回上级菜单
-EOF
+        network_render_menu
         read -r -p "请输入选项: " choice
         case "${choice}" in
             1) network_summary ;;
-            2) network_change_dns ;;
-            3) network_restore_dns ;;
-            4) network_show_ports ;;
-            5) network_test_port ;;
-            6) network_check_mail_ports ;;
-            7) network_show_bandwidth_connections ;;
-            8) network_enable_bbr ;;
+            2) network_show_public_ip ;;
+            3) network_change_dns ;;
+            4) network_restore_dns ;;
+            5) network_show_ports ;;
+            6) network_test_port ;;
             0) return 0 ;;
             *) invalid_choice ;;
         esac
