@@ -39,6 +39,14 @@ linux-toolbox/
 
 ## 运行方式
 
+### 远程一键执行
+
+> 现在支持单独执行 `install.sh`：如果当前目录下没有 `lib/` 和 `modules/`，脚本会自动拉取完整工具箱再启动。
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/luckxine/LinuxTools/feat/linux-toolbox-v1/install.sh)
+```
+
 ### 本地运行
 
 ```bash

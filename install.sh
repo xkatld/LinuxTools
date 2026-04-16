@@ -4,6 +4,40 @@ set -euo pipefail
 TOOLBOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TOOLBOX_ROOT
 
+bootstrap_toolbox_from_archive() {
+    local ref archive_url tmp_dir archive_file extracted_root
+
+    ref="${TOOLBOX_BOOTSTRAP_REF:-feat/linux-toolbox-v1}"
+    archive_url="${TOOLBOX_BOOTSTRAP_ARCHIVE_URL:-https://github.com/luckxine/LinuxTools/archive/refs/heads/${ref}.tar.gz}"
+    tmp_dir="$(mktemp -d /tmp/linux-toolbox-bootstrap.XXXXXX)"
+    archive_file="${tmp_dir}/toolbox.tar.gz"
+
+    echo "检测到当前仅有 install.sh，正在拉取完整工具箱..." >&2
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "${archive_url}" -o "${archive_file}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "${archive_file}" "${archive_url}"
+    else
+        echo "错误: 缺少 curl 或 wget，无法自动拉取完整工具箱。" >&2
+        exit 1
+    fi
+
+    tar -xzf "${archive_file}" -C "${tmp_dir}"
+    extracted_root="$(find "${tmp_dir}" -mindepth 1 -maxdepth 2 -type f -name install.sh | head -n 1 | xargs -r dirname)"
+
+    if [[ -z "${extracted_root}" || ! -f "${extracted_root}/lib/common.sh" ]]; then
+        echo "错误: 自动拉取的工具箱结构不完整，请检查下载源: ${archive_url}" >&2
+        exit 1
+    fi
+
+    exec bash "${extracted_root}/install.sh" "$@"
+}
+
+if [[ ! -f "${TOOLBOX_ROOT}/lib/common.sh" ]]; then
+    bootstrap_toolbox_from_archive "$@"
+fi
+
 # shellcheck source=lib/common.sh
 source "${TOOLBOX_ROOT}/lib/common.sh"
 # shellcheck source=lib/detect.sh
