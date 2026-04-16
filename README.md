@@ -79,6 +79,7 @@ bash install.sh --menu-only
 ### 3. 网络诊断与优化
 - 查看网络信息摘要
 - 修改 DNS
+- 支持 plain / systemd-resolved / resolvconf / NetworkManager 四种常见 DNS 接管方式
 - 恢复上次 DNS 配置
 - 自动生成 DNS 恢复脚本
 - 查看监听端口
@@ -122,6 +123,12 @@ done
 bash tests/smoke_toolbox_v1.sh
 ```
 
+### 高风险回归测试
+
+```bash
+bash tests/hardening_regression.sh
+```
+
 ## 注意事项
 
 1. 涉及改配置、装软件、改 SSH、换源等操作时，建议使用 root 运行。
@@ -135,7 +142,7 @@ bash tests/smoke_toolbox_v1.sh
 ## 下一步建议
 
 下一阶段可以继续补：
-- NetworkManager / resolvconf / dhclient 的 DNS 适配
+- dhclient 场景的 DNS 接管适配
 - 更细的日志与验证输出
 - AlmaLinux / Rocky / Alpine 适配
 - Docker 常见服务一键安装
