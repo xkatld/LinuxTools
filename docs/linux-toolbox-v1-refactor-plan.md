@@ -1,95 +1,58 @@
-# Linux Toolbox V1 重构方案
+# Linux Toolbox V1 重构与当前状态
 
 ## 当前判断
 
-当前基底仓库选择：`xkatld/LinuxTools`
+这个仓库已经不再是单纯的“脚本集合入口”，而是一个面向 Linux 服务器运维场景的 Bash 工具箱雏形。
 
-选择原因：
-1. 代码量小，便于快速重构。
-2. 当前已经有主菜单 + 子脚本的基本形态。
-3. 中文交互，适合继续改造成面向服务器运维的工具箱。
-4. 比 `kejilion/sh` 这类超大仓库更容易控复杂度。
+当前方向已经明确：
+1. 实用优先，不追求大而全。
+2. 主打服务器高频运维动作，不做大杂烩功能池。
+3. 本地模块化执行为主，同时兼容远程单文件入口。
+4. 高风险操作统一走“检查 -> 备份 -> 修改 -> 验证 -> 失败回滚/恢复提示”。
 
-不选其他候选的原因：
-- `kejilion/sh`：功能过多、历史包袱重，第一版容易陷入删改泥潭。
-- `SuperNG6/linux-setup.sh`：思路不错，但主入口脚本过大，且仓库许可证文件不完整，直接公开二改不够稳妥。
-- `tveal/bash-toolkit`：菜单框架清晰，但方向偏 AWS，会有较多无关代码需要清理。
-
-## 已检查结果
+## 仓库现状
 
 仓库本地路径：`/home/lucky/projects/linux-toolbox`
 
 当前分支：`feat/linux-toolbox-v1`
 
-已验证：
-- `linuxtools.sh`
-- `shell/apt-update.sh`
-- `shell/disk-manager.sh`
-- `shell/install-pve.sh`
-- `shell/linuxmirrors.sh`
-- `shell/ssh-manager.sh`
-- `shell/virtual-memory-manager.sh`
+当前已经完成的结构：
 
-以上脚本均通过 `bash -n` 语法检查。
+```text
+linux-toolbox/
+├── install.sh
+├── linuxtools.sh
+├── README.md
+├── docs/
+│   └── linux-toolbox-v1-refactor-plan.md
+├── lib/
+│   ├── common.sh
+│   ├── detect.sh
+│   └── ui.sh
+├── modules/
+│   ├── system.sh
+│   ├── security.sh
+│   ├── network.sh
+│   ├── docker.sh
+│   └── mirrors.sh
+├── shell/                 # 旧脚本，暂时保留作参考
+└── tests/
+    ├── smoke_toolbox_v1.sh
+    ├── hardening_regression.sh
+    └── bootstrap_selftest.sh
+```
 
-## 当前基底问题
-
-### 1. 主入口是“远程拉脚本再执行”
-这会带来几个问题：
-- 调试不方便
-- 本地版本与远程版本容易漂移
-- 安全性和可追踪性一般
-- 不利于做统一日志、统一备份、统一验证
-
-### 2. 模块命名和分组不统一
-当前是：
-- SSH 管理
-- 系统升级
-- 镜像脚本
-- 硬盘管理
-- PVE
-- 虚拟内存
-
-这更像“脚本集合入口”，还不是完整的“工具箱产品”。
-
-### 3. 缺统一公共库
-每个脚本重复写：
-- root 检查
-- 日志输出
-- 系统识别
-- 确认提示
-- 备份逻辑
-
-### 4. 缺统一验证与回滚
-高危改动后，还没有完全收口到一套统一流程里：
-- 先检查
-- 再备份
-- 再修改
-- 再验证
-- 失败回滚
-
-## 第一版重构目标
-
-将当前仓库改造成：
-- 本地模块执行
-- 主菜单分组明确
-- 统一公共函数库
-- 统一日志/备份/验证机制
-- 以服务器运维为主的第一版 Linux 工具箱
-
-## 第一版主菜单
+## 目前已经落地的 5 组功能
 
 ### 1. 系统基础管理
-建议功能：
 - 查看系统概况
 - 同步上海时间
 - 更新系统软件包
 - 安装常用工具集
 - 修改主机名
-- 创建用户并加入 sudo
+- 创建 sudo 用户
 
 ### 2. SSH 与安全管理
-建议功能：
 - 查看 SSH 当前配置摘要
 - 修改 SSH 端口
 - 开启/关闭 root 登录
@@ -99,120 +62,144 @@
 - 安装 Fail2ban
 
 ### 3. 网络诊断与优化
-建议功能：
 - 查看网络信息摘要
+- 查看公网 IP
 - 修改 DNS
+- 支持 plain / systemd-resolved / resolvconf / NetworkManager 四种常见 DNS 接管方式
+- 恢复上次 DNS 配置
+- 自动生成 DNS 恢复脚本
 - 查看监听端口
 - 测试指定端口连通性
-- 检查邮件端口
-- 查看带宽占用连接
-- 检查并启用 BBR
 
 ### 4. Docker 与服务环境
-建议功能：
 - 安装 Docker
-- 安装 Compose 插件
-- 配置 Docker 镜像加速
+- 安装 Docker Compose 插件
+- 查看 Docker 引擎状态
 - 查看容器状态
 - 查看容器日志
 - 清理 Docker 垃圾
 
-### 5. 磁盘、文件与备份
-建议功能：
-- 查看磁盘分区
-- 挂载数据盘
-- 卸载数据盘
-- 查大文件
-- 备份指定目录
-- 查看/清理 Bash 历史
+### 5. 换源
+- 系统换源 / Docker 换源分组
+- 查看当前系统源摘要
+- Debian / Ubuntu 换源
+- 恢复 Debian / Ubuntu 官方源
+- CentOS / Rocky / AlmaLinux 换源
+- Docker 镜像源预置、自定义、清空、查看配置
 
-## 建议目录结构
+## 已完成的关键重构
 
-```text
-linux-toolbox/
-├── install.sh
-├── README.md
-├── docs/
-│   └── linux-toolbox-v1-refactor-plan.md
-├── lib/
-│   ├── common.sh
-│   ├── detect.sh
-│   ├── ui.sh
-│   ├── backup.sh
-│   └── validate.sh
-├── modules/
-│   ├── system.sh
-│   ├── security.sh
-│   ├── network.sh
-│   ├── docker.sh
-│   └── disk.sh
-└── legacy/
-    └── shell/
+### 1. 入口重构
+- `install.sh` 已成为主入口
+- `linuxtools.sh` 已改成兼容转发入口
+- 旧的“远程拉子脚本后再执行”模式已经退到次要位置
+
+### 2. 公共库抽离
+已统一抽到 `lib/`：
+- 日志输出
+- root 检查
+- 备份逻辑
+- 统一确认提示
+- 系统识别
+- 包管理器适配
+
+### 3. 高风险功能补强
+已经重点补过这些高风险点：
+- SSH 改端口后校验新端口是否真的监听
+- SSH 修改失败时恢复原配置
+- DNS 识别不同接管方式，不再只粗暴改 `/etc/resolv.conf`
+- Docker `daemon.json` 合并写入，不再直接覆盖
+- 系统换源写入前探测镜像可达性
+- Docker 换源写入前探测 `/v2/`
+
+### 4. 菜单取舍调整
+当前已经明确不走“大而杂”的路线：
+- 去掉低价值、易分散注意力的边角功能
+- 保留上海时间同步
+- 保留公网 IP、系统源摘要、Docker 引擎状态这类高频排障入口
+- Docker 换源统一收口到“换源”分组
+
+### 5. 单文件远程入口补强
+`install.sh` 已支持自举模式：
+- 如果当前只有单文件 `install.sh`
+- 会自动拉取完整工具箱归档
+- 再切回完整目录执行
+
+这条链路已经有独立测试覆盖，不只是 README 里写一条命令。
+
+## 当前测试体系
+
+### 1. 冒烟测试
+文件：`tests/smoke_toolbox_v1.sh`
+
+作用：
+- 检查核心文件是否存在
+- 检查主菜单 5 个一级分组是否正常输出
+- 额外验证单文件自举后的主菜单是否能拉起
+
+### 2. 高风险回归测试
+文件：`tests/hardening_regression.sh`
+
+作用：
+- SSH 新端口监听校验
+- DNS 模式识别与写入辅助逻辑
+- Docker `daemon.json` 合并与清理
+- 系统源 / Docker 镜像探测逻辑
+- 菜单取舍与核心入口保留情况
+
+### 3. 单文件自举测试
+文件：`tests/bootstrap_selftest.sh`
+
+作用：
+- 只复制一份 `install.sh`
+- 本地打包当前仓库 tar.gz 作为自举源
+- 验证单文件入口能自动拉起完整工具箱
+
+## 当前验证方式
+
+```bash
+cd /home/lucky/projects/linux-toolbox
+for f in install.sh lib/*.sh modules/*.sh tests/*.sh; do
+  bash -n "$f"
+done
+bash tests/bootstrap_selftest.sh
+bash tests/hardening_regression.sh
+bash tests/smoke_toolbox_v1.sh
 ```
 
-## 重构策略
+## 当前设计结论
 
-### 阶段 1：保留旧脚本，建立新骨架
-- 新增 `install.sh`
-- 新增 `lib/`
-- 新增 `modules/`
-- 旧的 `shell/` 暂时保留，避免一次性拆崩
+这版 V1 已经具备继续迭代的基础，重点不是再继续铺功能，而是保持：
+1. 菜单清晰
+2. 风险可控
+3. 修改后可验证
+4. 远程单文件入口可自测
 
-### 阶段 2：把可复用能力抽到公共库
-优先抽这些：
-- 日志函数
-- root/sudo 检查
-- 系统检测
-- 包管理器适配
-- 统一确认提示
-- 配置备份
-- 结果验证
+也就是说，这个项目当前最合适的节奏是：
+- 小步补高频功能
+- 每补一项就补测试
+- 不把工具箱重新做回“大杂烩脚本集合”
 
-### 阶段 3：按菜单逐步迁移
-建议迁移顺序：
-1. system
-2. network
-3. security
-4. docker
-5. disk
+## 下一步建议
 
-### 阶段 4：清理旧入口
-当新入口稳定后：
-- 弱化旧 `linuxtools.sh`
-- 将旧 `shell/` 移到 `legacy/shell/`
-- README 改为新结构说明
+下一阶段更值得做的是：
+1. 把当前分支推到远程，固定一个可分享的测试入口。
+2. 用 commit SHA 固定 Raw 地址做远程安装验证，避免分支 Raw 缓存影响测试。
+3. 如果继续扩展，优先补：
+   - DNS 进一步兼容 dhclient 场景
+   - Docker 常见服务的一键部署模板
+   - 系统源摘要展示再更友好一点
+   - 更清晰的日志和失败提示
 
-## 第一批建议落地的文件
+## 不建议现在做的事
 
-### 新建
-- `install.sh`
-- `lib/common.sh`
-- `lib/detect.sh`
-- `lib/ui.sh`
-- `modules/system.sh`
-- `modules/security.sh`
-- `modules/network.sh`
-- `modules/docker.sh`
-- `modules/disk.sh`
+当前不建议优先做：
+- 面板大集合
+- 游戏或花哨功能
+- 未经充分约束的第三方脚本聚合
+- 太多系统专属特性一次性并入
 
-### 保留参考
-- `shell/ssh-manager.sh`
-- `shell/apt-update.sh`
-- `shell/disk-manager.sh`
-
-## 关键实现原则
-
-1. 危险操作必须二次确认。
-2. 修改配置前必须自动备份。
-3. 修改后必须立刻验证。
-4. 优先支持 Debian / Ubuntu。
-5. 第一版不追求大而全，先追求稳。
-
-## 下一步
-
-下一步直接进入脚手架实现：
-1. 建立新目录结构。
-2. 写 `install.sh` 主入口。
-3. 写 `lib/common.sh`、`lib/detect.sh`、`lib/ui.sh`。
-4. 先做系统、网络、SSH 三个模块的空骨架和基础菜单。
-5. 跑 `bash -n` 做最小验证。
+原因很简单：
+- 会让菜单失焦
+- 会让验证链路变重
+- 会显著提高后续维护成本

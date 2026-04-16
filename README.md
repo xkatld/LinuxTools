@@ -50,8 +50,16 @@ linux-toolbox/
 
 > 现在支持单独执行 `install.sh`：如果当前目录下没有 `lib/` 和 `modules/`，脚本会自动拉取完整工具箱再启动。
 
+分支版入口：
+
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/luckxine/LinuxTools/feat/linux-toolbox-v1/install.sh)
+```
+
+如果老大刚 push 完就要马上验证，建议优先用提交 SHA 固定地址，避免 GitHub Raw 分支缓存：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/luckxine/LinuxTools/09a6a5d/install.sh)
 ```
 
 ### 单文件自举自测
