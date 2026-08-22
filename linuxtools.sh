@@ -2,8 +2,17 @@
 
 set -euo pipefail
 
-GITHUB_RAW_URL=""
-declare -A SCRIPTS=()
+readonly GITHUB_RAW_URL="https://ghfast.top/https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell"
+
+declare -A SCRIPTS=(
+    ["1"]="虚拟内存综合管理;${GITHUB_RAW_URL}/virtual-memory-manager.sh"
+    ["2"]="linuxmirrors综合脚本;${GITHUB_RAW_URL}/linuxmirrors.sh"
+    ["3"]="SSH综合管理;${GITHUB_RAW_URL}/ssh-manager.sh"
+    ["4"]="PVE安装与镜像管理;${GITHUB_RAW_URL}/install-pve.sh"
+    ["5"]="Linux系统升级脚本;${GITHUB_RAW_URL}/apt-update.sh"
+    ["6"]="硬盘分区管理;${GITHUB_RAW_URL}/disk-manager.sh"
+    ["7"]="v2rayA安装脚本;${GITHUB_RAW_URL}/v2raya.sh"
+)
 
 msg_info() { echo "[INFO] $1"; }
 msg_ok() { echo "[OK] $1"; }
@@ -29,33 +38,6 @@ check_dependencies() {
     if ! command -v "clear" &>/dev/null; then
         msg_warn "'clear' 命令未找到，将使用备用清屏方式。"
     fi
-}
-
-detect_raw_url() {
-    local base_url="https://raw.githubusercontent.com/xkatld/LinuxTools/refs/heads/main/shell"
-    local accelerator="https://ghfast.top"
-    local country
-    msg_info "正在检测网络环境与连通性..."
-    country=$(curl -s --connect-timeout 2 http://ip-api.com/line?fields=countryCode 2>/dev/null || true)
-    if [[ "$country" == "CN" ]] || ! curl -fsSL --connect-timeout 2 https://raw.githubusercontent.com &>/dev/null; then
-        msg_warn "检测到处于中国地区或 GitHub 直连受限，自动启用国内加速节点。"
-        echo "${accelerator}/${base_url}"
-    else
-        echo "${base_url}"
-    fi
-}
-
-init_scripts() {
-    GITHUB_RAW_URL=$(detect_raw_url)
-    SCRIPTS=(
-        ["1"]="虚拟内存综合管理;${GITHUB_RAW_URL}/virtual-memory-manager.sh"
-        ["2"]="linuxmirrors综合脚本;${GITHUB_RAW_URL}/linuxmirrors.sh"
-        ["3"]="SSH综合管理;${GITHUB_RAW_URL}/ssh-manager.sh"
-        ["4"]="PVE安装与镜像管理;${GITHUB_RAW_URL}/install-pve.sh"
-        ["5"]="Linux系统升级脚本;${GITHUB_RAW_URL}/apt-update.sh"
-        ["6"]="硬盘分区管理;${GITHUB_RAW_URL}/disk-manager.sh"
-        ["7"]="v2rayA安装脚本;${GITHUB_RAW_URL}/v2raya.sh"
-    )
 }
 
 clear_screen() {
@@ -126,7 +108,6 @@ show_main_menu() {
 main() {
     check_root
     check_dependencies
-    init_scripts
     
     while true; do
         show_main_menu
