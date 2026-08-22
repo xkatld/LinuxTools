@@ -11,6 +11,7 @@ declare -A SCRIPTS=(
     ["4"]="PVE安装与镜像管理;${GITHUB_RAW_URL}/install-pve.sh"
     ["5"]="Linux系统升级脚本;${GITHUB_RAW_URL}/apt-update.sh"
     ["6"]="硬盘分区管理;${GITHUB_RAW_URL}/disk-manager.sh"
+    ["7"]="v2rayA安装脚本;${GITHUB_RAW_URL}/v2raya.sh"
 )
 
 msg_info() { echo "[INFO] $1"; }
