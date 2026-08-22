@@ -38,42 +38,40 @@ get_arch() {
     esac
 }
 
-check_installed() {
-    local has_v2raya=0
-    local has_core=0
-    local has_rules=0
-    
+install_v2raya_deb() {
     if command -v v2raya &>/dev/null || dpkg -l v2raya &>/dev/null; then
-        has_v2raya=1
+        msg_ok "v2rayA 主程序已安装，跳过下载。"
+        return 0
     fi
-    if [[ -x /usr/local/bin/v2ray || -x /usr/bin/v2ray ]]; then
-        has_core=1
+    local version arch deb_name download_url temp_deb
+    version="${DEFAULT_VERSION}"
+    arch=$(get_arch)
+    deb_name="installer_debian_${arch}_${version}.deb"
+    download_url="${ACCELERATOR_URL}/https://github.com/v2rayA/v2rayA/releases/download/v${version}/${deb_name}"
+    msg_info "检测到系统架构: ${arch}，预设大版本: ${version}"
+    msg_info "下载地址: ${download_url}"
+    temp_deb=$(mktemp --suffix=.deb)
+    trap "rm -f '$temp_deb'" EXIT
+    if ! curl -fsSL "$download_url" -o "$temp_deb"; then
+        msg_error "下载 deb 安装包失败"
+        exit 1
     fi
-    if [[ -f /usr/local/share/v2ray/geosite.dat && -f /usr/local/share/v2ray/geoip.dat ]]; then
-        has_rules=1
-    fi
-    
-    if [[ $has_v2raya -eq 1 && $has_core -eq 1 && $has_rules -eq 1 ]]; then
-        msg_ok "检测到系统已完整安装 v2rayA 及其内核与规则数据库。"
-        read -p "是否强制重新安装? (y/N): " -r confirm
-        confirm=${confirm:-N}
-        if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-            msg_info "跳过重装，正在启动服务..."
-            systemctl restart v2raya 2>/dev/null || true
-            systemctl enable v2raya 2>/dev/null || true
-            msg_ok "v2rayA 服务运行中！Web UI 地址: http://localhost:2017"
-            exit 0
-        fi
-    fi
+    msg_info "正在安装 v2rayA..."
+    apt-get update -y
+    apt-get install -y "$temp_deb"
+    msg_ok "v2rayA 主程序安装完成。"
 }
 
-install_v2ray_core_and_rules() {
-    local arch temp_dir core_file core_url geosite_url geoip_url
-    arch=$(get_arch)
-    msg_info "正在创建规则与内核保存目录..."
-    mkdir -p /usr/local/share/v2ray /usr/share/v2ray /usr/local/share/xray /usr/share/xray /usr/local/bin
+install_rules() {
+    if [[ -f /usr/local/share/v2ray/geosite.dat && -f /usr/local/share/v2ray/geoip.dat ]]; then
+        msg_ok "geosite.dat 与 geoip.dat 规则数据库已存在，跳过下载。"
+        return 0
+    fi
+    msg_info "正在创建规则文件存储目录..."
+    mkdir -p /usr/local/share/v2ray /usr/share/v2ray /usr/local/share/xray /usr/share/xray
     
     msg_info "正在下载 geosite.dat 与 geoip.dat 规则文件..."
+    local geosite_url geoip_url
     geosite_url="${ACCELERATOR_URL}/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
     geoip_url="${ACCELERATOR_URL}/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
     
@@ -86,7 +84,17 @@ install_v2ray_core_and_rules() {
     cp -f /usr/local/share/v2ray/geoip.dat /usr/local/share/xray/geoip.dat
     cp -f /usr/local/share/v2ray/geosite.dat /usr/share/xray/geosite.dat
     cp -f /usr/local/share/v2ray/geoip.dat /usr/share/xray/geoip.dat
-    
+    msg_ok "规则数据库部署完成。"
+}
+
+install_core() {
+    if [[ -x /usr/local/bin/v2ray || -x /usr/bin/v2ray ]]; then
+        msg_ok "v2ray-core 内核已存在，跳过下载。"
+        return 0
+    fi
+    mkdir -p /usr/local/bin
+    local arch temp_dir core_file core_url
+    arch=$(get_arch)
     msg_info "正在下载 v2ray-core 内核..."
     case "$arch" in
         x64) core_file="v2ray-linux-64.zip" ;;
@@ -106,39 +114,20 @@ install_v2ray_core_and_rules() {
             cp -f "$temp_dir/v2ray" /usr/local/bin/v2ray
             cp -f "$temp_dir/v2ray" /usr/bin/v2ray
             chmod +x /usr/local/bin/v2ray /usr/bin/v2ray
-            msg_ok "v2ray-core 内核安装完成"
+            msg_ok "v2ray-core 内核安装完成。"
         fi
     fi
 }
 
-install_v2raya() {
-    local version arch deb_name download_url temp_deb
-    version="${DEFAULT_VERSION}"
-    arch=$(get_arch)
-    deb_name="installer_debian_${arch}_${version}.deb"
-    download_url="${ACCELERATOR_URL}/https://github.com/v2rayA/v2rayA/releases/download/v${version}/${deb_name}"
-    msg_info "检测到系统架构: ${arch}，预设大版本: ${version}"
-    msg_info "下载地址: ${download_url}"
-    temp_deb=$(mktemp --suffix=.deb)
-    trap "rm -f '$temp_deb'" EXIT
-    if ! curl -fsSL "$download_url" -o "$temp_deb"; then
-        msg_error "下载 deb 安装包失败"
-        exit 1
-    fi
-    msg_info "正在安装 v2rayA 及依赖项..."
-    apt-get update -y
-    apt-get install -y "$temp_deb"
-    install_v2ray_core_and_rules
-    systemctl restart v2raya
-    systemctl enable v2raya
-    msg_ok "v2rayA 安装与核心配置成功！Web UI 地址: http://localhost:2017"
-}
-
 main() {
     check_root
-    check_installed
     check_deps
-    install_v2raya
+    install_v2raya_deb
+    install_rules
+    install_core
+    systemctl restart v2raya 2>/dev/null || true
+    systemctl enable v2raya 2>/dev/null || true
+    msg_ok "v2rayA 及相关环境准备就绪！Web UI 地址: http://localhost:2017"
 }
 
 main "$@"
