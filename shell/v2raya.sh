@@ -17,7 +17,7 @@ check_root() {
 }
 
 check_deps() {
-    local deps=("curl" "mktemp" "unzip")
+    local deps=("curl" "mktemp" "unzip" "iptables")
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             msg_info "正在安装必要依赖 $cmd..."
